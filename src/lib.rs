@@ -8,26 +8,81 @@ use std::collections::{BTreeMap, Bound};
 use byteorder::{BigEndian, ByteOrder};
 
 pub struct IpRange {
-    subnets: BTreeMap<CompactIpv4, CompactIpv4>, // Key: prefix, Value: mask
+    subnets: BTreeMap<CompactIpv4, Subnet>, // Key: prefix
 }
 
 impl IpRange {
-    fn new() -> IpRange {
+    pub fn new() -> IpRange {
         IpRange {
             subnets: BTreeMap::new(),
         }
     }
 
-    fn push(&mut self, subnet: Subnet) {
-        self.subnets.insert(subnet.prefix, subnet.mask);
+    pub fn push(&mut self, subnet: Subnet) {
+        let prev = self.prev_subnet(subnet);
+        let link = self.link_subnet(subnet);
+
+        let prev_inclusive = prev.map_or(false, |prev| prev.contains(subnet.prefix));
+        let link_inclusive = link.map_or(false, |link| link.contains(subnet.end()));
+
+        let mut new_subnet = subnet;
+        if prev_inclusive {
+            let prev_subnet = prev.unwrap();
+            self.subnets.remove(&prev_subnet.prefix);
+            new_subnet.prefix = prev_subnet.prefix;
+            new_subnet.mask &= prev_subnet.mask;
+        }
+        if link_inclusive {
+            let link_subnet = link.unwrap();
+            self.subnets.remove(&link_subnet.prefix);
+            new_subnet.mask &= link_subnet.mask;
+        }
+
+        let to_be_deleted: Vec<CompactIpv4> = self.subnets
+            .range((
+                prev.map_or(Bound::Unbounded, |prev| Bound::Excluded(prev.prefix)),
+                link.map_or(Bound::Unbounded, |link| Bound::Excluded(link.prefix)),
+            ))
+            .map(|(&prefix, _)| prefix)
+            .collect();
+
+        for prefix in to_be_deleted {
+            self.subnets.remove(&prefix);
+        }
+
+        self.subnets.insert(new_subnet.prefix, new_subnet);
     }
 
-    fn contains(&self, addr: CompactIpv4) -> bool {
-        let result = self.subnets
-            .range((Bound::Unbounded, Bound::Included(addr)));
-        result
+    pub fn contains(&self, addr: CompactIpv4) -> bool {
+        self.candidate(addr)
+            .map_or(false, |subnet| subnet.contains(addr))
+    }
+
+    fn prev_subnet(&self, subnet: Subnet) -> Option<Subnet> {
+        self.candidate(subnet.prefix)
+    }
+
+    fn next_subnet(&self, subnet: Subnet) -> Option<Subnet> {
+        self.subnets
+            .range((Bound::Excluded(subnet.end()), Bound::Unbounded))
+            .next()
+            .map(|(_, &subnet)| subnet)
+    }
+
+    fn link_subnet(&self, subnet: Subnet) -> Option<Subnet> {
+        self.next_subnet(subnet).and_then(|next_subnet| {
+            self.subnets
+                .range(..next_subnet.prefix)
+                .last()
+                .map(|(_, &subnet)| subnet)
+        })
+    }
+
+    fn candidate(&self, addr: CompactIpv4) -> Option<Subnet> {
+        self.subnets
+            .range((Bound::Unbounded, Bound::Included(addr)))
             .last()
-            .map_or(false, |(&prefix, &mask)| (addr & mask) == prefix)
+            .map(|(_, &subnet)| subnet)
     }
 }
 
@@ -39,6 +94,34 @@ impl std::ops::BitAnd for CompactIpv4 {
 
     fn bitand(self, other: CompactIpv4) -> CompactIpv4 {
         CompactIpv4(self.0 & other.0)
+    }
+}
+
+impl std::ops::BitOr for CompactIpv4 {
+    type Output = CompactIpv4;
+
+    fn bitor(self, other: CompactIpv4) -> CompactIpv4 {
+        CompactIpv4(self.0 | other.0)
+    }
+}
+
+impl std::ops::Not for CompactIpv4 {
+    type Output = CompactIpv4;
+
+    fn not(self) -> CompactIpv4 {
+        CompactIpv4(!self.0)
+    }
+}
+
+impl std::ops::BitAndAssign for CompactIpv4 {
+    fn bitand_assign(&mut self, other: CompactIpv4) {
+        self.0 &= other.0;
+    }
+}
+
+impl std::ops::BitOrAssign for CompactIpv4 {
+    fn bitor_assign(&mut self, other: CompactIpv4) {
+        self.0 |= other.0;
     }
 }
 
@@ -54,10 +137,20 @@ impl From<u32> for CompactIpv4 {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Subnet {
-    prefix: CompactIpv4,
-    mask: CompactIpv4,
+    pub prefix: CompactIpv4,
+    pub mask: CompactIpv4,
+}
+
+impl Subnet {
+    pub fn contains(&self, addr: CompactIpv4) -> bool {
+        (addr & self.mask) == self.prefix
+    }
+
+    pub fn end(&self) -> CompactIpv4 {
+        self.prefix | !(self.mask)
+    }
 }
 
 impl FromStr for Subnet {
@@ -67,25 +160,28 @@ impl FromStr for Subnet {
         s.find('/')
             .ok_or(ParseSubnetError::new("No slash found"))
             .and_then(|slash| {
-                let prefix: Result<Ipv4Addr, _> = s[..slash].parse();
-                let prefix = prefix
-                    .map(|addr| addr.into())
+                let prefix = s[..slash]
+                    .parse()
+                    .map(|addr: Ipv4Addr| addr.into())
                     .map_err(|_| ParseSubnetError::new("Illegal prefix"));
 
-                let mask: Result<Ipv4Addr, _> = s[(slash + 1)..].parse();
-                let mask = mask.map(|addr| addr.into()).or_else(|_| {
-                    let size: Result<u32, _> = s[(slash + 1)..].parse();
-                    size.map_err(|_| ParseSubnetError::new("Unknown subnet format"))
-                        .and_then(|size| if size == 32 {
-                            Ok(0xffffffffu32)
-                        } else {
-                            0xffffffffu32
+                let mask = s[(slash + 1)..]
+                    .parse()
+                    .map(|addr: Ipv4Addr| addr.into())
+                    .or_else(|_| {
+                        s[(slash + 1)..]
+                            .parse()
+                            .map_err(|_| ParseSubnetError::new("Unknown subnet format"))
+                            .and_then(|size: u32| if size == 32 {
+                                Ok(0xffffffffu32)
+                            } else {
+                                0xffffffffu32
                                     .checked_shr(size) // Err when size > 32
                                     .ok_or(ParseSubnetError::new("Prefix size out of range"))
                                     .map(|x| !x)
-                        })
-                        .map(|mask| CompactIpv4(mask))
-                });
+                            })
+                            .map(|mask| CompactIpv4(mask))
+                    });
 
                 prefix.and_then(|prefix: CompactIpv4| {
                     mask.map(|mask| {
@@ -175,8 +271,19 @@ mod tests {
     fn contains_ip() {
         let mut ip_range = IpRange::new();
         ip_range.push("192.168.5.130/24".parse().unwrap());
-
         let ip: Ipv4Addr = "192.168.5.1".parse().unwrap();
-        assert!(ip_range.contains(ip.into()))
+        assert!(ip_range.contains(ip.into()));
+        let ip: Ipv4Addr = "192.168.6.1".parse().unwrap();
+        assert!(!ip_range.contains(ip.into()));
+
+        let mut ip_range = IpRange::new();
+        ip_range.push("172.16.5.130/24".parse().unwrap());
+        ip_range.push("172.16.3.1/16".parse().unwrap());
+        let ip: Ipv4Addr = "172.16.5.1".parse().unwrap();
+        assert!(ip_range.contains(ip.into()));
+        let ip: Ipv4Addr = "172.16.31.1".parse().unwrap();
+        assert!(ip_range.contains(ip.into()));
+
+        //TODO Add more tests
     }
 }
