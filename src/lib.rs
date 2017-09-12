@@ -19,8 +19,16 @@ impl IpRange {
     }
 
     pub fn push(&mut self, subnet: Subnet) {
+        println!("subnet: {:?}", subnet);
         let prev = self.prev_subnet(subnet);
-        let link = self.link_subnet(subnet);
+        let link_range = self.next_subnet(subnet)
+            .map_or(Bound::Unbounded, |next_subnet| {
+                Bound::Excluded(next_subnet.prefix)
+            });
+        let link = self.subnets
+            .range((Bound::Included(subnet.prefix), link_range))
+            .last()
+            .map(|(_, &subnet)| subnet);
 
         let prev_inclusive = prev.map_or(false, |prev| prev.contains(subnet.prefix));
         let link_inclusive = link.map_or(false, |link| link.contains(subnet.end()));
@@ -38,11 +46,15 @@ impl IpRange {
             new_subnet.mask &= link_subnet.mask;
         }
 
+        let range = (
+            prev.map_or(Bound::Unbounded, |prev| Bound::Excluded(prev.prefix)),
+            Bound::Excluded(subnet.end()),
+        );
+
+        println!("{:?}", range);
+
         let to_be_deleted: Vec<CompactIpv4> = self.subnets
-            .range((
-                prev.map_or(Bound::Unbounded, |prev| Bound::Excluded(prev.prefix)),
-                link.map_or(Bound::Unbounded, |link| Bound::Excluded(link.prefix)),
-            ))
+            .range(range)
             .map(|(&prefix, _)| prefix)
             .collect();
 
@@ -69,15 +81,6 @@ impl IpRange {
             .map(|(_, &subnet)| subnet)
     }
 
-    fn link_subnet(&self, subnet: Subnet) -> Option<Subnet> {
-        self.next_subnet(subnet).and_then(|next_subnet| {
-            self.subnets
-                .range(..next_subnet.prefix)
-                .last()
-                .map(|(_, &subnet)| subnet)
-        })
-    }
-
     fn candidate(&self, addr: CompactIpv4) -> Option<Subnet> {
         self.subnets
             .range((Bound::Unbounded, Bound::Included(addr)))
@@ -86,7 +89,7 @@ impl IpRange {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct CompactIpv4(u32);
 
 impl std::ops::BitAnd for CompactIpv4 {
@@ -137,7 +140,21 @@ impl From<u32> for CompactIpv4 {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+impl Into<u32> for CompactIpv4 {
+    fn into(self: CompactIpv4) -> u32 {
+        self.0
+    }
+}
+
+impl fmt::Debug for CompactIpv4 {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let mut bytes = [0u8; 4];
+        BigEndian::write_u32(&mut bytes, self.0);
+        write!(f, "{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
+    }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub struct Subnet {
     pub prefix: CompactIpv4,
     pub mask: CompactIpv4,
@@ -150,6 +167,13 @@ impl Subnet {
 
     pub fn end(&self) -> CompactIpv4 {
         self.prefix | !(self.mask)
+    }
+}
+
+impl fmt::Debug for Subnet {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let mask: u32 = self.mask.into();
+        write!(f, "{:?}/{}", self.prefix, mask.trailing_zeros())
     }
 }
 
@@ -268,22 +292,37 @@ mod tests {
     }
 
     #[test]
-    fn contains_ip() {
+    fn with_single_subnet() {
         let mut ip_range = IpRange::new();
         ip_range.push("192.168.5.130/24".parse().unwrap());
         let ip: Ipv4Addr = "192.168.5.1".parse().unwrap();
         assert!(ip_range.contains(ip.into()));
         let ip: Ipv4Addr = "192.168.6.1".parse().unwrap();
         assert!(!ip_range.contains(ip.into()));
+    }
 
+    #[test]
+    fn with_multiple_subnets() {
         let mut ip_range = IpRange::new();
         ip_range.push("172.16.5.130/24".parse().unwrap());
+        let ip: Ipv4Addr = "172.16.6.1".parse().unwrap();
+        assert!(!ip_range.contains(ip.into()));
         ip_range.push("172.16.3.1/16".parse().unwrap());
-        let ip: Ipv4Addr = "172.16.5.1".parse().unwrap();
         assert!(ip_range.contains(ip.into()));
         let ip: Ipv4Addr = "172.16.31.1".parse().unwrap();
         assert!(ip_range.contains(ip.into()));
+        let ip: Ipv4Addr = "172.17.0.1".parse().unwrap();
+        assert!(!ip_range.contains(ip.into()));
 
-        //TODO Add more tests
+        let mut ip_range = IpRange::new();
+        ip_range.push("192.168.5.1/24".parse().unwrap());
+        ip_range.push("192.168.6.1/22".parse().unwrap());
+        ip_range.push("192.168.128.1/20".parse().unwrap());
+        let ip: Ipv4Addr = "192.168.1.1".parse().unwrap();
+        assert!(!ip_range.contains(ip.into()));
+        let ip: Ipv4Addr = "192.168.4.1".parse().unwrap();
+        assert!(ip_range.contains(ip.into()));
+        let ip: Ipv4Addr = "192.168.130.1".parse().unwrap();
+        assert!(ip_range.contains(ip.into()));
     }
 }
