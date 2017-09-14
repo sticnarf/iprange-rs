@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::Ipv4Addr;
-use std::collections::{BTreeMap, Bound};
+use std::collections::{btree_map, BTreeMap, Bound};
 use byteorder::{BigEndian, ByteOrder};
 
 pub struct IpRange {
@@ -19,7 +19,6 @@ impl IpRange {
     }
 
     pub fn push(&mut self, subnet: Subnet) {
-        println!("subnet: {:?}", subnet);
         let prev = self.prev_subnet(subnet);
         let link_range = self.next_subnet(subnet)
             .map_or(Bound::Unbounded, |next_subnet| {
@@ -50,8 +49,6 @@ impl IpRange {
             prev.map_or(Bound::Unbounded, |prev| Bound::Excluded(prev.prefix)),
             Bound::Excluded(subnet.end()),
         );
-
-        println!("{:?}", range);
 
         let to_be_deleted: Vec<CompactIpv4> = self.subnets
             .range(range)
@@ -86,6 +83,29 @@ impl IpRange {
             .range((Bound::Unbounded, Bound::Included(addr)))
             .last()
             .map(|(_, &subnet)| subnet)
+    }
+}
+
+impl<'a> IntoIterator for &'a IpRange {
+    type Item = Subnet;
+    type IntoIter = IpRangeIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IpRangeIter {
+            map_iter: self.subnets.iter(),
+        }
+    }
+}
+
+pub struct IpRangeIter<'a> {
+    map_iter: btree_map::Iter<'a, CompactIpv4, Subnet>,
+}
+
+impl<'a> Iterator for IpRangeIter<'a> {
+    type Item = Subnet;
+
+    fn next(&mut self) -> Option<Subnet> {
+        self.map_iter.next().map(|(_, &subnet)| subnet)
     }
 }
 
@@ -173,7 +193,7 @@ impl Subnet {
 impl fmt::Debug for Subnet {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let mask: u32 = self.mask.into();
-        write!(f, "{:?}/{}", self.prefix, mask.trailing_zeros())
+        write!(f, "{:?}/{}", self.prefix, 32 - mask.trailing_zeros())
     }
 }
 
@@ -324,5 +344,19 @@ mod tests {
         assert!(ip_range.contains(ip.into()));
         let ip: Ipv4Addr = "192.168.130.1".parse().unwrap();
         assert!(ip_range.contains(ip.into()));
+    }
+
+    #[test]
+    fn iter_ip_range() {
+        let mut ip_range = IpRange::new();
+        ip_range.push("192.168.5.1/24".parse().unwrap());
+        ip_range.push("192.168.6.1/22".parse().unwrap());
+        ip_range.push("192.168.128.1/20".parse().unwrap());
+
+        let ranges: Vec<String> = ip_range
+            .into_iter()
+            .map(|subnet| format!("{:?}", subnet))
+            .collect();
+        assert_eq!(ranges, vec!["192.168.4.0/22", "192.168.128.0/20"]);
     }
 }
