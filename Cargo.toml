@@ -2,6 +2,9 @@
 name = "iprange"
 version = "0.1.0"
 authors = ["Yilin Chen <sticnarf@gmail.com>"]
+description = "A library to manage IP ranges"
+repository = "https://github.com/sticnarf/iprange-rs"
+license = "MIT"
 
 [dependencies]
 byteorder = "1.1.0"
