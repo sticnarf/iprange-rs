@@ -26,7 +26,7 @@ impl IpRange {
             });
         let link = self.subnets
             .range((Bound::Included(subnet.prefix), link_range))
-            .last()
+            .next_back()
             .map(|(_, &subnet)| subnet);
 
         let prev_inclusive = prev.map_or(false, |prev| prev.contains(subnet.prefix));
@@ -81,7 +81,7 @@ impl IpRange {
     fn candidate(&self, addr: CompactIpv4) -> Option<Subnet> {
         self.subnets
             .range((Bound::Unbounded, Bound::Included(addr)))
-            .last()
+            .next_back()
             .map(|(_, &subnet)| subnet)
     }
 }
