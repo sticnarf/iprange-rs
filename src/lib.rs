@@ -18,46 +18,29 @@ pub struct IpRange {
 impl IpRange {
     pub fn new() -> IpRange {
         IpRange {
-            subnets: vec![Arc::new(RefCell::new(BTreeMap::new())); 32],
+            subnets: (0..33)
+                .map(|_| Arc::new(RefCell::new(BTreeMap::new())))
+                .collect(),
         }
     }
 
     pub fn add(&mut self, subnet: Subnet) {
-        let prefix_size = subnet.prefix_size as usize;
-
-        for larger in self.subnets[0..prefix_size].iter() {
-            if let Some((&larger_prefix, &larger_subnet)) = larger
-                .borrow()
-                .range((Bound::Unbounded, Bound::Included(subnet.prefix)))
-                .next_back()
-            {
-                if subnet.prefix & larger_subnet.mask() == larger_prefix {
-                    return;
-                }
-            }
+        if !self.includes(subnet) {
+            self.remove_inside(subnet);
+            self.subnets[subnet.prefix_size]
+                .borrow_mut()
+                .insert(subnet.prefix, subnet);
         }
-
-        for smaller in self.subnets[prefix_size..32].iter() {
-            let to_be_removed: Vec<CompactIpv4> = smaller
-                .borrow()
-                .range((
-                    Bound::Included(subnet.prefix),
-                    Bound::Included(subnet.end()),
-                ))
-                .map(|(&prefix, _)| prefix)
-                .collect();
-            for prefix in to_be_removed {
-                smaller.borrow_mut().remove(&prefix);
-            }
-        }
-
-        self.subnets[prefix_size]
-            .borrow_mut()
-            .insert(subnet.prefix, subnet);
     }
 
     pub fn remove(&mut self, subnet: Subnet) {
-        unimplemented!()
+        self.remove_inside(subnet);
+
+        while let Some(super_subnet) = self.super_subnet(subnet) {
+            self.split_subnet(super_subnet);
+            self.remove_subnet(subnet);
+            // assert!(false)
+        }
         // let outer = self.outer_subnet(subnet);
         // if let Some(outer) = outer {
         //     self.subnets.remove(&outer.prefix);
@@ -114,52 +97,71 @@ impl IpRange {
     }
 
     pub fn includes(&self, subnet: Subnet) -> bool {
-        unimplemented!()
-        // self.prev_subnet(subnet)
-        //     .map(|prev| prev.includes(subnet))
-        //     .unwrap_or_default()
+        self.super_subnet(subnet).is_some()
     }
 
-    fn find_subnet(&self, ip: CompactIpv4) -> Option<Subnet> {
-        for subnets in self.subnets.iter() {
-            let subnets = subnets.borrow();
-            if let Some((&prefix, &subnet)) = subnets
-                .range((Bound::Unbounded, Bound::Included(ip)))
+    fn super_subnet(&self, subnet: Subnet) -> Option<Subnet> {
+        for larger in self.subnets[0..(subnet.prefix_size + 1)].iter() {
+            if let Some((&larger_prefix, &larger_subnet)) = larger
+                .borrow()
+                .range((Bound::Unbounded, Bound::Included(subnet.prefix)))
                 .next_back()
             {
-                if ip & subnet.mask() == prefix {
-                    return Some(subnet);
+                if subnet.prefix & larger_subnet.mask() == larger_prefix {
+                    return Some(larger_subnet);
                 }
             }
         }
         None
     }
 
-    fn add_subnet(&mut self, prefix: CompactIpv4, mask: CompactIpv4) {
-        // self.subnets.insert(prefix, Subnet { prefix, mask });
+    fn find_subnet(&self, ip: CompactIpv4) -> Option<Subnet> {
+        self.super_subnet(ip.into())
     }
 
-    // fn prev_subnet(&self, subnet: Subnet) -> Option<Subnet> {
-    //     // self.candidate(subnet.prefix)
-    // }
+    fn split_subnet(&mut self, subnet: Subnet) {
+        assert!(subnet.prefix_size < 32);
 
-    // fn outer_subnet(&self, subnet: Subnet) -> Option<Subnet> {
-    //     self.subnets
-    //         .range((Bound::Unbounded, Bound::Included(subnet.prefix)))
-    //         .next_back()
-    //         .and_then(|(_, &outer)| if outer.includes(subnet) {
-    //             Some(outer)
-    //         } else {
-    //             None
-    //         })
-    // }
+        self.remove_subnet(subnet);
+        self.add_subnet(subnet.prefix, subnet.prefix_size + 1);
+        self.add_subnet(
+            (subnet.prefix.0 | (0xffffffffu32 >> (subnet.prefix_size + 1)) + 1).into(),
+            subnet.prefix_size + 1,
+        )
+    }
 
-    // fn candidate(&self, addr: CompactIpv4) -> Option<Subnet> {
-    //     self.subnets
-    //         .range((Bound::Unbounded, Bound::Included(addr)))
-    //         .next_back()
-    //         .map(|(_, &subnet)| subnet)
-    // }
+    fn remove_inside(&mut self, subnet: Subnet) {
+        for smaller in self.subnets[subnet.prefix_size..33].iter() {
+            let to_be_removed: Vec<CompactIpv4> = smaller
+                .borrow()
+                .range((
+                    Bound::Included(subnet.prefix),
+                    Bound::Included(subnet.end()),
+                ))
+                .map(|(&prefix, _)| prefix)
+                .collect();
+            for prefix in to_be_removed {
+                smaller.borrow_mut().remove(&prefix);
+            }
+        }
+    }
+
+    fn add_subnet(&mut self, prefix: CompactIpv4, prefix_size: usize) {
+        println!("Add prefix: {:b}", prefix.0);
+        self.subnets[prefix_size].borrow_mut().insert(
+            prefix,
+            Subnet {
+                prefix,
+                prefix_size,
+            },
+        );
+    }
+
+    fn remove_subnet(&mut self, subnet: Subnet) {
+        self.subnets[subnet.prefix_size]
+            .borrow_mut()
+            .remove(&subnet.prefix);
+    }
 }
 
 impl<'a> FromIterator<Subnet> for IpRange {
@@ -265,7 +267,7 @@ impl CompactIpv4 {
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct Subnet {
     pub prefix: CompactIpv4,
-    pub prefix_size: u32,
+    pub prefix_size: usize,
 }
 
 impl Subnet {
@@ -284,9 +286,18 @@ impl Subnet {
     pub fn mask(&self) -> CompactIpv4 {
         CompactIpv4(
             0xffffffffu32
-                .checked_shl(32 - self.prefix_size)
+                .checked_shl(32 - self.prefix_size as u32)
                 .unwrap_or_default(), // The default value of u32 is 0
         )
+    }
+}
+
+impl From<CompactIpv4> for Subnet {
+    fn from(ip: CompactIpv4) -> Subnet {
+        Subnet {
+            prefix: ip,
+            prefix_size: 32,
+        }
     }
 }
 
@@ -330,7 +341,7 @@ impl FromStr for Subnet {
                     mask.map(|mask| {
                         Subnet {
                             prefix: prefix & mask, // Fix subnet
-                            prefix_size: (32 - mask.0.trailing_zeros()),
+                            prefix_size: (32 - mask.0.trailing_zeros()) as usize,
                         }
                     })
                 })
@@ -454,7 +465,7 @@ mod tests {
         let ip: Ipv4Addr = "192.168.2.252".parse().unwrap();
         assert!(!ip_range.contains(ip));
         ip_range.add("192.168.0.0/18".parse().unwrap());
-        assert!(!ip_range.contains(ip));
+        assert!(ip_range.contains(ip));
 
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/22".parse().unwrap());
