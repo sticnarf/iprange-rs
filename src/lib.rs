@@ -1,13 +1,11 @@
 extern crate byteorder;
 
 use std::str::FromStr;
-use std::sync::Arc;
-use std::cell::RefCell;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::Ipv4Addr;
 use std::iter::FromIterator;
-use std::collections::{btree_map, BTreeMap, Bound};
+use std::collections::{BTreeMap, Bound};
 use byteorder::{BigEndian, ByteOrder};
 
 #[derive(Clone)]
@@ -32,13 +30,14 @@ impl IpRange {
         self
     }
 
-    pub fn remove(&mut self, subnet: Subnet) {
+    pub fn remove(&mut self, subnet: Subnet) -> &mut IpRange {
         self.remove_inside(subnet);
 
         while let Some(super_subnet) = self.super_subnet(subnet) {
             self.split_subnet(super_subnet);
             self.remove_subnet(subnet);
         }
+        self
     }
 
     pub fn simplify(&mut self) {
@@ -480,7 +479,12 @@ mod tests {
         let subnet2 = "172.16.5.130/16".parse().unwrap();
         let subnet3 = "192.168.1.1/24".parse().unwrap();
         let subnet4 = "254.254.254.254/32".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2).add(subnet3).add(subnet4);
+        ip_range
+            .add(subnet1)
+            .add(subnet2)
+            .add(subnet3)
+            .add(subnet4)
+            .simplify();
 
         assert_eq!(ip_range.into_iter().count(), 4);
         assert_eq!(Some(subnet1), ip_range.get_subnet(8, "10.0.0.0"));
@@ -499,11 +503,14 @@ mod tests {
             .add("192.168.21.0/24".parse().unwrap())
             .add("192.168.22.0/24".parse().unwrap())
             .add("192.168.23.0/24".parse().unwrap())
-            .add("192.168.24.0/21".parse().unwrap());
-        ip_range.simplify();
-        
+            .add("192.168.24.0/21".parse().unwrap())
+            .simplify();
+
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some("192.168.0.0/19".parse().unwrap()), ip_range.get_subnet(19, "192.168.0.0"));
+        assert_eq!(
+            Some("192.168.0.0/19".parse().unwrap()),
+            ip_range.get_subnet(19, "192.168.0.0")
+        );
     }
 
     #[test]
@@ -511,97 +518,129 @@ mod tests {
         let mut ip_range = IpRange::new();
         let subnet1 = "172.16.4.130/24".parse().unwrap();
         let subnet2 = "172.16.5.130/22".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2);
+        ip_range.add(subnet1).add(subnet2).simplify();
 
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
-        assert_eq!(None, ip_range.get_subnet(24, "172.16.4.0"));
     }
 
     #[test]
-    fn with_multiple_subnets() {
+    fn add_multiple_subnets_joint2() {
         let mut ip_range = IpRange::new();
-        ip_range.add("172.16.5.130/24".parse().unwrap());
-        let ip: Ipv4Addr = "172.16.6.1".parse().unwrap();
-        assert!(!ip_range.contains(ip));
-        ip_range.add("172.16.3.1/16".parse().unwrap());
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "172.16.31.1".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "172.17.0.1".parse().unwrap();
-        assert!(!ip_range.contains(ip));
+        let subnet1 = "172.16.5.130/24".parse().unwrap();
+        let subnet2 = "172.16.4.130/22".parse().unwrap();
+        ip_range.add(subnet1).add(subnet2).simplify();
 
-        let mut ip_range = IpRange::new();
-        ip_range.add("192.168.5.1/24".parse().unwrap());
-        ip_range.add("192.168.6.1/22".parse().unwrap());
-        ip_range.add("192.168.128.1/20".parse().unwrap());
-        let ip: Ipv4Addr = "192.168.1.1".parse().unwrap();
-        assert!(!ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.4.1".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.130.1".parse().unwrap();
-        assert!(ip_range.contains(ip));
-
-        let mut ip_range = IpRange::new();
-        ip_range.add("192.168.0.0/24".parse().unwrap());
-        ip_range.add("192.168.1.0/24".parse().unwrap());
-        let ip: Ipv4Addr = "192.168.0.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.1.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.2.252".parse().unwrap();
-        assert!(!ip_range.contains(ip));
-        ip_range.add("192.168.0.0/18".parse().unwrap());
-        assert!(ip_range.contains(ip));
-
-        let mut ip_range = IpRange::new();
-        ip_range.add("192.168.0.0/22".parse().unwrap());
-        ip_range.add("192.168.4.0/24".parse().unwrap());
-        let ip: Ipv4Addr = "192.168.0.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.2.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.4.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.5.252".parse().unwrap();
-        assert!(!ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.6.252".parse().unwrap();
-        assert!(!ip_range.contains(ip));
+        assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
     }
 
     #[test]
-    fn remove_subnets() {
+    fn add_multiple_subnets_joint3() {
+        let mut ip_range = IpRange::new();
+        let subnet1 = "172.16.4.130/24".parse().unwrap();
+        let subnet2 = "172.16.5.130/22".parse().unwrap();
+        ip_range.add(subnet2).add(subnet1).simplify();
+
+        assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
+    }
+
+    #[test]
+    fn add_multiple_subnets_joint4() {
+        let mut ip_range = IpRange::new();
+        let subnet1 = "172.16.5.130/24".parse().unwrap();
+        let subnet2 = "172.16.5.131/24".parse().unwrap();
+        ip_range.add(subnet1).add(subnet2).simplify();
+
+        assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(Some(subnet2), ip_range.get_subnet(24, "172.16.5.0"));
+    }
+
+    #[test]
+    fn add_multiple_subnets_joint5() {
+        let mut ip_range = IpRange::new();
+        let subnet1 = "172.16.5.130/24".parse().unwrap();
+        let subnet2 = "172.16.5.131/16".parse().unwrap();
+        ip_range.add(subnet1).add(subnet2).simplify();
+
+        assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
+    }
+
+    #[test]
+    fn add_multiple_subnets_joint6() {
+        let mut ip_range = IpRange::new();
+        let subnet1 = "172.16.5.130/24".parse().unwrap();
+        let subnet2 = "0.0.0.0/0".parse().unwrap();
+        ip_range.add(subnet1).add(subnet2).simplify();
+
+        assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(Some(subnet2), ip_range.get_subnet(0, "0.0.0.0"));
+    }
+
+    #[test]
+    fn remove_subnets_no_split() {
+        let mut ip_range = IpRange::new();
+        let subnet1 = "192.168.0.0/24".parse().unwrap();
+        let subnet2 = "172.16.0.0/16".parse().unwrap();
+        ip_range.add(subnet1).add(subnet2).simplify();
+
+        ip_range.remove(subnet1);
+        assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
+    }
+
+    #[test]
+    fn remove_subnets_split1() {
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/22".parse().unwrap());
-        ip_range.remove("192.168.2.0/23".parse().unwrap());
-        let ip: Ipv4Addr = "192.168.0.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.1.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.2.252".parse().unwrap();
-        assert!(!ip_range.contains(ip));
+        ip_range
+            .remove("192.168.2.0/23".parse().unwrap())
+            .simplify();
 
+        assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(
+            Some("192.168.0.0/23".parse().unwrap()),
+            ip_range.get_subnet(23, "192.168.0.0")
+        );
+    }
+
+    #[test]
+    fn remove_subnets_split2() {
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/22".parse().unwrap());
-        ip_range.remove("192.168.0.0/23".parse().unwrap());
-        let ip: Ipv4Addr = "192.168.2.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.3.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.1.252".parse().unwrap();
-        assert!(!ip_range.contains(ip));
+        ip_range
+            .remove("192.168.0.0/23".parse().unwrap())
+            .simplify();
 
+        assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(
+            Some("192.168.2.0/23".parse().unwrap()),
+            ip_range.get_subnet(23, "192.168.2.0")
+        );
+    }
+
+    #[test]
+    fn remove_subnets_split3() {
         let mut ip_range = IpRange::new();
-        ip_range.add("192.168.0.0/16".parse().unwrap());
-        ip_range.remove("192.168.128.0/24".parse().unwrap());
-        let ip: Ipv4Addr = "192.168.127.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.1.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.129.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.252.252".parse().unwrap();
-        assert!(ip_range.contains(ip));
-        let ip: Ipv4Addr = "192.168.128.252".parse().unwrap();
-        assert!(!ip_range.contains(ip));
+        ip_range.add("192.168.0.0/22".parse().unwrap());
+        ip_range
+            .remove("192.168.2.0/25".parse().unwrap())
+            .simplify();
+
+        assert_eq!(ip_range.into_iter().count(), 3);
+        assert_eq!(
+            Some("192.168.0.0/23".parse().unwrap()),
+            ip_range.get_subnet(23, "192.168.0.0")
+        );
+        assert_eq!(
+            Some("192.168.2.128/25".parse().unwrap()),
+            ip_range.get_subnet(25, "192.168.2.128")
+        );
+        assert_eq!(
+            Some("192.168.3.0/24".parse().unwrap()),
+            ip_range.get_subnet(24, "192.168.3.0")
+        );
     }
 }
