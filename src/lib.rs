@@ -41,6 +41,42 @@ impl IpRange {
         }
     }
 
+    pub fn simplify(&mut self) {
+        let mut to_be_added = Vec::new();
+        for (prefix_size, subnets) in self.subnets.iter_mut().enumerate().rev() {
+            for &prefix in &to_be_added {
+                subnets.insert(
+                    prefix,
+                    Subnet {
+                        prefix,
+                        prefix_size,
+                    },
+                );
+            }
+            to_be_added.clear();
+
+            if subnets.len() < 2 {
+                continue;
+            }
+            let larger_mask = 0xffffffffu32
+                .checked_shl(33 - prefix_size as u32)
+                .unwrap_or_default();
+
+            let mut to_be_removed = Vec::new();
+            for ((&prefix1, _), (&prefix2, _)) in subnets.iter().zip(subnets.iter().skip(1)) {
+                if prefix1.0 & larger_mask == prefix1.0 && prefix2.0 & larger_mask == prefix1.0 {
+                    to_be_removed.push(prefix1);
+                    to_be_removed.push(prefix2);
+                    to_be_added.push(prefix1);
+                }
+            }
+
+            for prefix in &to_be_removed {
+                subnets.remove(&prefix);
+            }
+        }
+    }
+
     pub fn merge(&self, other: &IpRange) -> IpRange {
         unimplemented!()
         // self.into_iter().chain(other.into_iter()).collect()
@@ -451,6 +487,23 @@ mod tests {
         assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
         assert_eq!(Some(subnet3), ip_range.get_subnet(24, "192.168.1.0"));
         assert_eq!(Some(subnet4), ip_range.get_subnet(32, "254.254.254.254"));
+    }
+
+    #[test]
+    fn simplify() {
+        let mut ip_range = IpRange::new();
+        ip_range
+            .add("192.168.0.0/20".parse().unwrap())
+            .add("192.168.16.0/22".parse().unwrap())
+            .add("192.168.20.0/24".parse().unwrap())
+            .add("192.168.21.0/24".parse().unwrap())
+            .add("192.168.22.0/24".parse().unwrap())
+            .add("192.168.23.0/24".parse().unwrap())
+            .add("192.168.24.0/21".parse().unwrap());
+        ip_range.simplify();
+        
+        assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(Some("192.168.0.0/19".parse().unwrap()), ip_range.get_subnet(19, "192.168.0.0"));
     }
 
     #[test]
