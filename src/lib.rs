@@ -205,9 +205,9 @@ impl<'a> FromIterator<Subnet> for IpRange {
         T: IntoIterator<Item = Subnet>,
     {
         let mut ip_range = IpRange::new();
-        iter.into_iter().fold((), |_, subnet| {
+        for subnet in iter {
             ip_range.add(subnet);
-        });
+        }
         ip_range
     }
 }
