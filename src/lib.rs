@@ -109,7 +109,7 @@ impl IpRange {
         self.super_subnet(ip.into().into())
     }
 
-    fn super_subnet(&self, subnet: Subnet) -> Option<Subnet> {
+    pub fn super_subnet(&self, subnet: Subnet) -> Option<Subnet> {
         for larger in self.subnets[0..(subnet.prefix_size + 1)].iter() {
             if let Some((&larger_prefix, &larger_subnet)) = larger
                 .range((Bound::Unbounded, Bound::Included(subnet.prefix)))
@@ -652,10 +652,18 @@ mod tests {
         fn find_subnet_by_ip(&self, ip: &str) -> Option<Subnet> {
             self.find_subnet(ip.parse::<Ipv4Addr>().unwrap())
         }
+
+        fn includes_subnet(&self, subnet: &str) -> bool {
+            self.includes(subnet.parse().unwrap())
+        }
+
+        fn super_subnet_by_subnet(&self, subnet: &str) -> Option<Subnet> {
+            self.super_subnet(subnet.parse().unwrap())
+        }
     }
 
     #[test]
-    fn contains_ip_one_subnet() {
+    fn contains_ip_with_one_subnet() {
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/24".parse().unwrap());
 
@@ -667,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn contains_ip_many_subnets() {
+    fn contains_ip_with_many_subnets() {
         let mut ip_range = IpRange::new();
         ip_range
             .add("192.168.0.0/24".parse().unwrap())
@@ -708,7 +716,7 @@ mod tests {
     }
 
     #[test]
-    fn find_subnet_one_subnet() {
+    fn find_subnet_with_one_subnet() {
         let mut ip_range = IpRange::new();
         let subnet = "192.168.0.0/24".parse().unwrap();
         ip_range.add(subnet);
@@ -721,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    fn find_subnet_many_subnets() {
+    fn find_subnet_with_many_subnets() {
         let mut ip_range = IpRange::new();
         let subnet1 = "192.168.0.0/24".parse().unwrap();
         let subnet2 = "172.16.0.0/16".parse().unwrap();
@@ -760,5 +768,143 @@ mod tests {
         assert_eq!(None, ip_range.find_subnet_by_ip("8.8.8.8"));
         assert_eq!(None, ip_range.find_subnet_by_ip("192.168.0.0"));
         assert_eq!(Some(subnet), ip_range.find_subnet_by_ip("254.254.254.254"));
+    }
+
+    #[test]
+    fn includes_subnet_with_one_subnet() {
+        let mut ip_range = IpRange::new();
+        ip_range.add("192.168.0.0/24".parse().unwrap());
+
+        assert!(ip_range.includes_subnet("192.168.0.0/24"));
+        assert!(ip_range.includes_subnet("192.168.0.128/25"));
+        assert!(!ip_range.includes_subnet("192.168.0.0/23"));
+        assert!(!ip_range.includes_subnet("192.168.1.0/24"));
+        assert!(!ip_range.includes_subnet("192.167.0.0/24"));
+    }
+
+    #[test]
+    fn includes_subnet_with_many_subnets() {
+        let mut ip_range = IpRange::new();
+        ip_range
+            .add("192.168.0.0/24".parse().unwrap())
+            .add("172.16.0.0/16".parse().unwrap())
+            .add("10.0.0.0/8".parse().unwrap())
+            .simplify();
+
+        assert!(ip_range.includes_subnet("192.168.0.128/25"));
+        assert!(ip_range.includes_subnet("172.16.32.0/20"));
+        assert!(ip_range.includes_subnet("10.10.0.0/16"));
+        assert!(!ip_range.includes_subnet("0.0.0.0/0"));
+        assert!(!ip_range.includes_subnet("8.0.0.0/6"));
+        assert!(!ip_range.includes_subnet("8.0.0.0/7"));
+        assert!(!ip_range.includes_subnet("11.0.0.0/9"));
+        assert!(!ip_range.includes_subnet("192.167.255.255/32"));
+        assert!(!ip_range.includes_subnet("255.0.0.0/8"));
+    }
+
+    #[test]
+    fn includes_subnet_boundary1() {
+        let mut ip_range = IpRange::new();
+        ip_range.add("0.0.0.0/0".parse().unwrap());
+
+        assert!(ip_range.includes_subnet("0.0.0.0/0"));
+        assert!(ip_range.includes_subnet("8.0.0.0/6"));
+        assert!(ip_range.includes_subnet("11.0.0.0/9"));
+        assert!(ip_range.includes_subnet("192.168.0.128/25"));
+        assert!(ip_range.includes_subnet("255.255.255.255/32"));
+    }
+
+    #[test]
+    fn includes_subnet_boundary2() {
+        let mut ip_range = IpRange::new();
+        ip_range.add("254.254.254.254/32".parse().unwrap());
+
+        assert!(!ip_range.includes_subnet("0.0.0.0/0"));
+        assert!(!ip_range.includes_subnet("8.0.0.0/6"));
+        assert!(!ip_range.includes_subnet("254.254.0.0/16"));
+        assert!(ip_range.includes_subnet("254.254.254.254/32"));
+        assert!(!ip_range.includes_subnet("255.255.255.255/32"));
+    }
+
+    #[test]
+    fn super_subnet_with_one_subnet() {
+        let mut ip_range = IpRange::new();
+        let subnet = "192.168.0.0/24".parse().unwrap();
+        ip_range.add(subnet);
+
+        assert_eq!(
+            Some(subnet),
+            ip_range.super_subnet_by_subnet("192.168.0.0/24")
+        );
+        assert_eq!(
+            Some(subnet),
+            ip_range.super_subnet_by_subnet("192.168.0.128/25")
+        );
+        assert_eq!(None, ip_range.super_subnet_by_subnet("192.168.0.0/23"));
+        assert_eq!(None, ip_range.super_subnet_by_subnet("192.168.1.0/24"));
+        assert_eq!(None, ip_range.super_subnet_by_subnet("192.167.0.0/24"));
+    }
+
+    #[test]
+    fn super_subnet_with_many_subnets() {
+        let mut ip_range = IpRange::new();
+        let subnet1 = "192.168.0.0/24".parse().unwrap();
+        let subnet2 = "172.16.0.0/16".parse().unwrap();
+        let subnet3 = "10.0.0.0/8".parse().unwrap();
+        ip_range.add(subnet1).add(subnet2).add(subnet3).simplify();
+
+        assert_eq!(
+            Some(subnet1),
+            ip_range.super_subnet_by_subnet("192.168.0.128/25")
+        );
+        assert_eq!(
+            Some(subnet2),
+            ip_range.super_subnet_by_subnet("172.16.32.0/20")
+        );
+        assert_eq!(
+            Some(subnet3),
+            ip_range.super_subnet_by_subnet("10.10.0.0/16")
+        );
+        assert_eq!(None, ip_range.super_subnet_by_subnet("0.0.0.0/0"));
+        assert_eq!(None, ip_range.super_subnet_by_subnet("8.0.0.0/6"));
+        assert_eq!(None, ip_range.super_subnet_by_subnet("8.0.0.0/7"));
+        assert_eq!(None, ip_range.super_subnet_by_subnet("11.0.0.0/9"));
+        assert_eq!(None, ip_range.super_subnet_by_subnet("192.167.255.255/32"));
+        assert_eq!(None, ip_range.super_subnet_by_subnet("255.0.0.0/8"));
+    }
+
+    #[test]
+    fn super_subnet_boundary1() {
+        let mut ip_range = IpRange::new();
+        let subnet = "0.0.0.0/0".parse().unwrap();
+        ip_range.add(subnet);
+
+        assert_eq!(Some(subnet), ip_range.super_subnet_by_subnet("0.0.0.0/0"));
+        assert_eq!(Some(subnet), ip_range.super_subnet_by_subnet("8.0.0.0/6"));
+        assert_eq!(Some(subnet), ip_range.super_subnet_by_subnet("11.0.0.0/9"));
+        assert_eq!(
+            Some(subnet),
+            ip_range.super_subnet_by_subnet("192.168.0.128/25")
+        );
+        assert_eq!(
+            Some(subnet),
+            ip_range.super_subnet_by_subnet("255.255.255.255/32")
+        );
+    }
+
+    #[test]
+    fn super_subnet_boundary2() {
+        let mut ip_range = IpRange::new();
+        let subnet = "254.254.254.254/32".parse().unwrap();
+        ip_range.add(subnet);
+
+        assert_eq!(None, ip_range.super_subnet_by_subnet("0.0.0.0/0"));
+        assert_eq!(None, ip_range.super_subnet_by_subnet("8.0.0.0/6"));
+        assert_eq!(None, ip_range.super_subnet_by_subnet("254.254.0.0/16"));
+        assert_eq!(
+            Some(subnet),
+            ip_range.super_subnet_by_subnet("254.254.254.254/32")
+        );
+        assert_eq!(None, ip_range.super_subnet_by_subnet("255.255.255.255/32"));
     }
 }
