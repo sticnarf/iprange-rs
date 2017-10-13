@@ -455,6 +455,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_invalid_subnets() {
+        assert!("192.168.256.130/5".parse::<Subnet>().is_err());
+        assert!("192.168.5.130/-1".parse::<Subnet>().is_err());
+        assert!("192.168.5.130/33".parse::<Subnet>().is_err());
+        assert!("192.168.5.33".parse::<Subnet>().is_err());
+        assert!("192.168.5.130/0.0.0".parse::<Subnet>().is_err());
+        assert!("192.168.5.130/0.0.0.256".parse::<Subnet>().is_err());
+    }
+
     impl IpRange {
         fn get_subnet(&self, prefix_size: usize, prefix: &str) -> Option<Subnet> {
             self.subnets[prefix_size]
