@@ -77,24 +77,21 @@ impl IpRange {
     }
 
     pub fn merge(&self, other: &IpRange) -> IpRange {
-        unimplemented!()
-        // self.into_iter().chain(other.into_iter()).collect()
+        self.into_iter().chain(other.into_iter()).collect()
     }
 
     pub fn intersect(&self, other: &IpRange) -> IpRange {
-        unimplemented!()
-        // let range1 = self.into_iter().filter(|&subnet| other.includes(subnet));
-        // let range2 = other.into_iter().filter(|&subnet| self.includes(subnet));
-        // range1.chain(range2).collect()
+        let range1 = self.into_iter().filter(|&&subnet| other.includes(subnet));
+        let range2 = other.into_iter().filter(|&&subnet| self.includes(subnet));
+        range1.chain(range2).collect()
     }
 
     pub fn exclude(&self, other: &IpRange) -> IpRange {
-        unimplemented!()
-        // let mut new = self.clone();
-        // for subnet in other.into_iter() {
-        //     new.remove(subnet);
-        // }
-        // new
+        let mut new = self.clone();
+        for &subnet in other {
+            new.remove(subnet);
+        }
+        new
     }
 
     pub fn contains<T: Into<CompactIpv4>>(&self, addr: T) -> bool {
@@ -199,7 +196,7 @@ impl<'a> Iterator for IpRangeIter<'a> {
     }
 }
 
-impl<'a> FromIterator<Subnet> for IpRange {
+impl FromIterator<Subnet> for IpRange {
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = Subnet>,
@@ -208,6 +205,21 @@ impl<'a> FromIterator<Subnet> for IpRange {
         for subnet in iter {
             ip_range.add(subnet);
         }
+        ip_range.simplify();
+        ip_range
+    }
+}
+
+impl<'a> FromIterator<&'a Subnet> for IpRange {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = &'a Subnet>,
+    {
+        let mut ip_range = IpRange::new();
+        for subnet in iter {
+            ip_range.add(*subnet);
+        }
+        ip_range.simplify();
         ip_range
     }
 }
