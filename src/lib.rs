@@ -1,3 +1,42 @@
+//! `iprange` is a library for managing IP ranges.
+//!
+//! An [`IpRange`] is a set of subnets.
+//! You can add or remove a [`Subnet`] from an [`IpRange`].
+//!
+//! It also supports these useful operations:
+//!
+//! * [`merge`]
+//! * [`intersect`]
+//! * [`exclude`]
+//!
+//! Here is a simple example:
+//!
+//! ```
+//! extern crate iprange;
+//!
+//! use std::net::Ipv4Addr;
+//! use iprange::IpRange;
+//!
+//! fn main() {
+//!     let mut ip_range = IpRange::new();
+//!     ip_range
+//!         .add("10.0.0.0/8".parse().unwrap())
+//!         .add("172.16.0.0/16".parse().unwrap())
+//!         .add("192.168.1.0/24".parse().unwrap());
+//!
+//!     assert!(ip_range.contains("172.16.32.1".parse::<Ipv4Addr>().unwrap()));
+//!     assert!(ip_range.contains("192.168.1.1".parse::<Ipv4Addr>().unwrap()));
+//! }
+//! ```
+//!
+//! Currently, this library supports IPv4 only.
+//!
+//! [`IpRange`]: struct.IpRange.html
+//! [`Subnet`]: struct.Subnet.html
+//! [`merge`]: struct.IpRange.html#method.merge
+//! [`intersect`]: struct.IpRange.html#method.intersect
+//! [`exclude`]: struct.IpRange.html#method.exclude
+
 extern crate byteorder;
 
 use std::str::FromStr;
@@ -8,6 +47,21 @@ use std::iter::FromIterator;
 use std::collections::{BTreeMap, Bound};
 use byteorder::{BigEndian, ByteOrder};
 
+/// A set of subnets that supports various operations.
+///
+/// `IntoIter` is implemented for `&IpRange`. So, you can use `for`
+/// to iterate over the subnets in an `IpRange`:
+///
+/// ```
+/// let ip_range: IpRange = ["172.16.0.0/16", "192.168.1.0/24"]
+///     .iter()
+///     .map(|s| s.parse::<Subnet>().unwrap())
+///     .collect();
+///
+/// for subnet in &ip_range {
+///     println!("{:?}", subnet);
+/// }
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpRange {
     // The index of the Vec is the prefix size of the subnets
@@ -16,12 +70,32 @@ pub struct IpRange {
 }
 
 impl IpRange {
+    /// Creates an empty `IpRange`.
     pub fn new() -> IpRange {
         IpRange {
             subnets: (0..33).map(|_| BTreeMap::new()).collect(),
         }
     }
 
+    /// Add a subnet to `self`.
+    ///
+    /// Returns `&mut self` in order to enable method chaining.
+    ///
+    /// Pay attention that this operation will not combine two
+    /// subnets automatically. To do this, call [`simplify`] method
+    /// explicitly. For example:
+    ///
+    /// ```
+    /// let mut ip_range = IpRange::new();
+    /// ip_range.add("192.168.0.0/24".parse().unwrap())
+    ///         .add("192.168.1.0/24".parse().unwrap());
+    /// assert_eq!(ip_range.into_iter().count(), 2);
+    ///
+    /// ip_range.simplify();
+    /// assert_eq!(ip_range.into_iter().count(), 1);
+    /// ```
+    ///
+    /// [`simplify`]: struct.IpRange.html#method.simplify
     pub fn add(&mut self, subnet: Subnet) -> &mut IpRange {
         if !self.includes(subnet) {
             self.remove_inside(subnet);
@@ -30,6 +104,21 @@ impl IpRange {
         self
     }
 
+    /// Remove a subnet from `self`.
+    ///
+    /// Returns `&mut self` in order to enable method chaining.
+    ///
+    /// `self` does not necessarily has exactly the subnet to be removed.
+    /// The subnet can be a subnet of a subnet in `self`.
+    /// This method will do splitting and remove the corresponding subnet.
+    /// For example:
+    ///
+    /// ```
+    /// let mut ip_range = IpRange::new();
+    /// ip_range.add("192.168.0.0/23".parse().unwrap())
+    ///         .remove("192.168.0.0/24".parse().unwrap());
+    /// // Now, ip_range has only one subnet: "192.168.1.0/24".
+    /// ```
     pub fn remove(&mut self, subnet: Subnet) -> &mut IpRange {
         self.remove_inside(subnet);
 
@@ -40,6 +129,21 @@ impl IpRange {
         self
     }
 
+    /// Simplify `self` by combining subnets. For example:
+    ///
+    /// ```
+    /// let mut ip_range = IpRange::new();
+    /// ip_range
+    ///     .add("192.168.0.0/20".parse().unwrap())
+    ///     .add("192.168.16.0/22".parse().unwrap())
+    ///     .add("192.168.20.0/24".parse().unwrap())
+    ///     .add("192.168.21.0/24".parse().unwrap())
+    ///     .add("192.168.22.0/24".parse().unwrap())
+    ///     .add("192.168.23.0/24".parse().unwrap())
+    ///     .add("192.168.24.0/21".parse().unwrap())
+    ///     .simplify();
+    /// // Now, ip_range has only one subnet: "192.168.0.0/19".
+    /// ```
     pub fn simplify(&mut self) {
         let mut to_be_added = Vec::new();
         for (prefix_size, subnets) in self.subnets.iter_mut().enumerate().rev() {
@@ -76,16 +180,28 @@ impl IpRange {
         }
     }
 
+    /// Returns a new `IpRange` which contains all subnets
+    /// that is either in `self` or in `other`.
+    ///
+    /// The returned `IpRange` is simplified.
     pub fn merge(&self, other: &IpRange) -> IpRange {
         self.into_iter().chain(other.into_iter()).collect()
     }
 
+    /// Returns a new `IpRange` which contains all subnets
+    /// that is in both `self` and `other`.
+    ///
+    /// The returned `IpRange` is simplified.
     pub fn intersect(&self, other: &IpRange) -> IpRange {
         let range1 = self.into_iter().filter(|&&subnet| other.includes(subnet));
         let range2 = other.into_iter().filter(|&&subnet| self.includes(subnet));
         range1.chain(range2).collect()
     }
 
+    /// Returns a new `IpRange` which contains all subnets
+    /// that is in `self` while not in `other`.
+    ///
+    /// The returned `IpRange` is simplified.
     pub fn exclude(&self, other: &IpRange) -> IpRange {
         let mut new = self.clone();
         for &subnet in other {
@@ -94,18 +210,26 @@ impl IpRange {
         new
     }
 
-    pub fn contains<T: Into<CompactIpv4>>(&self, addr: T) -> bool {
-        self.find_subnet(addr.into()).is_some()
+    /// Tests if `ip` is in `self`.
+    pub fn contains<T: Into<CompactIpv4>>(&self, ip: T) -> bool {
+        self.find_subnet(ip.into()).is_some()
     }
 
+    /// Tests if `self` includes `subnet`.
     pub fn includes(&self, subnet: Subnet) -> bool {
         self.super_subnet(subnet).is_some()
     }
 
+    /// Returns the subnet in `self` that contains `ip`.
+    ///
+    /// Returns None if no subnet in `self` contains `ip`.
     pub fn find_subnet<T: Into<CompactIpv4>>(&self, ip: T) -> Option<Subnet> {
         self.super_subnet(ip.into().into())
     }
 
+    /// Returns the subnet in `self` which is the supernetwork of `subnet`.
+    ///
+    /// Returns None if no subnet in `self` includes `subnet`.
     pub fn super_subnet(&self, subnet: Subnet) -> Option<Subnet> {
         for larger in self.subnets[0..(subnet.prefix_size + 1)].iter() {
             if let Some((&larger_prefix, &larger_subnet)) = larger
@@ -120,6 +244,7 @@ impl IpRange {
         None
     }
 
+    // If `subnet` is not a single IP subnet, split it into two.
     fn split_subnet(&mut self, subnet: Subnet) {
         assert!(subnet.prefix_size < 32);
 
@@ -131,6 +256,7 @@ impl IpRange {
         )
     }
 
+    // Remove all subnets inside `subnet`.
     fn remove_inside(&mut self, subnet: Subnet) {
         for smaller in self.subnets[subnet.prefix_size..33].iter_mut() {
             let to_be_removed: Vec<CompactIpv4> = smaller
@@ -146,6 +272,7 @@ impl IpRange {
         }
     }
 
+    // An util method to add a subnet.
     fn add_subnet(&mut self, prefix: CompactIpv4, prefix_size: usize) {
         self.subnets[prefix_size].insert(
             prefix,
@@ -156,6 +283,7 @@ impl IpRange {
         );
     }
 
+    // Remove `subnet` from `self`.
     fn remove_subnet(&mut self, subnet: Subnet) {
         self.subnets[subnet.prefix_size].remove(&subnet.prefix);
     }
@@ -176,6 +304,9 @@ impl<'a> IntoIterator for &'a IpRange {
     }
 }
 
+/// An iterator over the subnets in an [`IpRange`].
+///
+/// [`IpRange`]: struct.IpRange.html
 pub struct IpRangeIter<'a> {
     iter: Box<Iterator<Item = &'a Subnet> + 'a>,
 }
@@ -224,6 +355,7 @@ impl<'a> FromIterator<&'a Subnet> for IpRange {
     }
 }
 
+/// A wrapper of `u32` to represent an IPv4 address.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct CompactIpv4(u32);
 
@@ -304,34 +436,65 @@ impl fmt::Debug for CompactIpv4 {
 }
 
 impl CompactIpv4 {
+    /// This method returns the successor of `self`.
+    ///
+    /// If `self` does not have a successor, that is to say
+    /// `self` is `255.255.255.255`, then `None` is returned.
     pub fn successor(self) -> Option<CompactIpv4> {
         self.0.checked_add(1).map(|v| CompactIpv4(v))
     }
 
+    /// This method returns the predecessor of `self`.
+    ///
+    /// If `self` does not have a predecessor, that is to say
+    /// `self` is `0.0.0.0`, then `None` is returned.
     pub fn predecessor(self) -> Option<CompactIpv4> {
         self.0.checked_sub(1).map(|v| CompactIpv4(v))
     }
 }
 
+/// Represents a subdivision of an IP network.
+///
+/// We use CIDR notation to repesent a subnetwork.
+/// Thus, a `Subnet` is composed with a `prefix` and the size of the subnet
+/// written after a slash (`/`). The size of the subnet is
+/// represented by `prefix_size`, which is the count of leading ones
+/// in the subnet mask.
+///
+/// `Subnet` implements `FromStr` so that users can easily convert a
+/// string slice to a `Subnet`. Currently, two formats are supported:
+///
+/// * `a.b.c.d/prefix_size` (e.g. `10.0.0.0/8`)
+/// * `a.b.c.d/mask` (e.g. `192.168.0.0/255.255.255.0`)
+///
+/// The subnet will be automatically fixed after parsing. For example:
+/// parsing `172.16.32.1/16` results in `172.16.0.0/16`.
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct Subnet {
+    /// The prefix IP of the subnet
     pub prefix: CompactIpv4,
+    /// The count of leading ones of the subnet mask
     pub prefix_size: usize,
 }
 
 impl Subnet {
+    /// Tests if `self` contains the IP `addr`.
     pub fn contains<T: Into<CompactIpv4>>(&self, addr: T) -> bool {
         (addr.into() & self.mask()) == self.prefix
     }
 
+    /// Returns the last IP in `self`.
     pub fn end(&self) -> CompactIpv4 {
         self.prefix | !(self.mask())
     }
 
+    /// Tests if `self` includes `other`, in other words,
+    /// `self` is a supernetwork of `other`.
     pub fn includes(&self, other: Subnet) -> bool {
         self.prefix <= other.prefix && self.end() >= other.end()
     }
 
+    /// Returns the subnet mask of `self`.
     pub fn mask(&self) -> CompactIpv4 {
         CompactIpv4(
             0xffffffffu32
@@ -398,6 +561,7 @@ impl FromStr for Subnet {
     }
 }
 
+/// An error which can be returned when parsing an subnet.
 #[derive(Debug)]
 pub struct ParseSubnetError {
     reason: String,
