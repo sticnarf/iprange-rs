@@ -8,5 +8,8 @@ readme = "README.md"
 documentation = "https://docs.rs/iprange/"
 license = "MIT"
 
+[badges]
+travis-ci = { repository = "sticnarf/iprange-rs" }
+
 [dependencies]
 byteorder = "1.1.0"
