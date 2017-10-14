@@ -1,6 +1,7 @@
 # iprange-rs
 
-[![](https://img.shields.io/crates/v/iprange.svg)](https://crates.io/crates/iprange)
+[![Crates Version](https://img.shields.io/crates/v/iprange.svg)](https://crates.io/crates/iprange)
+[![Build Status](https://travis-ci.org/sticnarf/iprange-rs.svg?branch=master)](https://travis-ci.org/sticnarf/iprange-rs)
 
 `iprange` is a Rust library for managing IP ranges. 
 
