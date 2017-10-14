@@ -53,6 +53,8 @@ use byteorder::{BigEndian, ByteOrder};
 /// to iterate over the subnets in an `IpRange`:
 ///
 /// ```
+/// use iprange::{IpRange, Subnet};
+///
 /// let ip_range: IpRange = ["172.16.0.0/16", "192.168.1.0/24"]
 ///     .iter()
 ///     .map(|s| s.parse::<Subnet>().unwrap())
@@ -86,6 +88,8 @@ impl IpRange {
     /// explicitly. For example:
     ///
     /// ```
+    /// use iprange::IpRange;
+    ///
     /// let mut ip_range = IpRange::new();
     /// ip_range.add("192.168.0.0/24".parse().unwrap())
     ///         .add("192.168.1.0/24".parse().unwrap());
@@ -114,6 +118,8 @@ impl IpRange {
     /// For example:
     ///
     /// ```
+    /// use iprange::IpRange;
+    ///
     /// let mut ip_range = IpRange::new();
     /// ip_range.add("192.168.0.0/23".parse().unwrap())
     ///         .remove("192.168.0.0/24".parse().unwrap());
@@ -132,6 +138,8 @@ impl IpRange {
     /// Simplify `self` by combining subnets. For example:
     ///
     /// ```
+    /// use iprange::IpRange;
+    ///
     /// let mut ip_range = IpRange::new();
     /// ip_range
     ///     .add("192.168.0.0/20".parse().unwrap())
