@@ -44,7 +44,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::Ipv4Addr;
 use std::iter::FromIterator;
-use std::collections::{BTreeMap, Bound};
+use std::collections::{BTreeSet, Bound};
 use byteorder::{BigEndian, ByteOrder};
 
 /// A set of subnets that supports various operations.
@@ -68,14 +68,14 @@ use byteorder::{BigEndian, ByteOrder};
 pub struct IpRange {
     // The index of the Vec is the prefix size of the subnets
     // which the corresponding BTreeMap contains
-    subnets: Vec<BTreeMap<CompactIpv4, Subnet>>,
+    subnets: Vec<BTreeSet<CompactIpv4>>,
 }
 
 impl IpRange {
     /// Creates an empty `IpRange`.
     pub fn new() -> IpRange {
         IpRange {
-            subnets: (0..33).map(|_| BTreeMap::new()).collect(),
+            subnets: (0..33).map(|_| BTreeSet::new()).collect(),
         }
     }
 
@@ -103,7 +103,7 @@ impl IpRange {
     pub fn add(&mut self, subnet: Subnet) -> &mut IpRange {
         if !self.includes(subnet) {
             self.remove_inside(subnet);
-            self.subnets[subnet.prefix_size].insert(subnet.prefix, subnet);
+            self.subnets[subnet.prefix_size].insert(subnet.prefix);
         }
         self
     }
@@ -156,13 +156,7 @@ impl IpRange {
         let mut to_be_added = Vec::new();
         for (prefix_size, subnets) in self.subnets.iter_mut().enumerate().rev() {
             for &prefix in &to_be_added {
-                subnets.insert(
-                    prefix,
-                    Subnet {
-                        prefix,
-                        prefix_size,
-                    },
-                );
+                subnets.insert(prefix);
             }
             to_be_added.clear();
 
@@ -174,7 +168,7 @@ impl IpRange {
                 .unwrap_or_default();
 
             let mut to_be_removed = Vec::new();
-            for ((&prefix1, _), (&prefix2, _)) in subnets.iter().zip(subnets.iter().skip(1)) {
+            for (&prefix1, &prefix2) in subnets.iter().zip(subnets.iter().skip(1)) {
                 if prefix1.0 & larger_mask == prefix1.0 && prefix2.0 & larger_mask == prefix1.0 {
                     to_be_removed.push(prefix1);
                     to_be_removed.push(prefix2);
@@ -201,8 +195,8 @@ impl IpRange {
     ///
     /// The returned `IpRange` is simplified.
     pub fn intersect(&self, other: &IpRange) -> IpRange {
-        let range1 = self.into_iter().filter(|&&subnet| other.includes(subnet));
-        let range2 = other.into_iter().filter(|&&subnet| self.includes(subnet));
+        let range1 = self.into_iter().filter(|&subnet| other.includes(subnet));
+        let range2 = other.into_iter().filter(|&subnet| self.includes(subnet));
         range1.chain(range2).collect()
     }
 
@@ -212,7 +206,7 @@ impl IpRange {
     /// The returned `IpRange` is simplified.
     pub fn exclude(&self, other: &IpRange) -> IpRange {
         let mut new = self.clone();
-        for &subnet in other {
+        for subnet in other {
             new.remove(subnet);
         }
         new
@@ -239,11 +233,15 @@ impl IpRange {
     ///
     /// Returns None if no subnet in `self` includes `subnet`.
     pub fn super_subnet(&self, subnet: Subnet) -> Option<Subnet> {
-        for larger in self.subnets[0..(subnet.prefix_size + 1)].iter() {
-            if let Some((&larger_prefix, &larger_subnet)) = larger
+        for (larger_size, larger) in self.subnets[0..(subnet.prefix_size + 1)].iter().enumerate() {
+            if let Some(&larger_prefix) = larger
                 .range((Bound::Unbounded, Bound::Included(subnet.prefix)))
                 .next_back()
             {
+                let larger_subnet = Subnet {
+                    prefix: larger_prefix,
+                    prefix_size: larger_size,
+                };
                 if subnet.prefix & larger_subnet.mask() == larger_prefix {
                     return Some(larger_subnet);
                 }
@@ -272,7 +270,7 @@ impl IpRange {
                     Bound::Included(subnet.prefix),
                     Bound::Included(subnet.end()),
                 ))
-                .map(|(&prefix, _)| prefix)
+                .map(|&prefix| prefix)
                 .collect();
             for prefix in to_be_removed {
                 smaller.remove(&prefix);
@@ -282,13 +280,7 @@ impl IpRange {
 
     // An util method to add a subnet.
     fn add_subnet(&mut self, prefix: CompactIpv4, prefix_size: usize) {
-        self.subnets[prefix_size].insert(
-            prefix,
-            Subnet {
-                prefix,
-                prefix_size,
-            },
-        );
+        self.subnets[prefix_size].insert(prefix);
     }
 
     // Remove `subnet` from `self`.
@@ -298,16 +290,21 @@ impl IpRange {
 }
 
 impl<'a> IntoIterator for &'a IpRange {
-    type Item = &'a Subnet;
+    type Item = Subnet;
     type IntoIter = IpRangeIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         IpRangeIter {
-            iter: Box::new(
-                self.subnets
-                    .iter()
-                    .flat_map(|m| m.iter().map(|(_, subnet)| subnet)),
-            ),
+            iter: Box::new(self.subnets.iter().enumerate().flat_map(
+                |(prefix_size, s)| {
+                    s.iter().map(move |&prefix| {
+                        Subnet {
+                            prefix,
+                            prefix_size,
+                        }
+                    })
+                },
+            )),
         }
     }
 }
@@ -316,11 +313,11 @@ impl<'a> IntoIterator for &'a IpRange {
 ///
 /// [`IpRange`]: struct.IpRange.html
 pub struct IpRangeIter<'a> {
-    iter: Box<Iterator<Item = &'a Subnet> + 'a>,
+    iter: Box<Iterator<Item = Subnet> + 'a>,
 }
 
 impl<'a> Iterator for IpRangeIter<'a> {
-    type Item = &'a Subnet;
+    type Item = Subnet;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
@@ -653,7 +650,12 @@ mod tests {
         fn get_subnet(&self, prefix_size: usize, prefix: &str) -> Option<Subnet> {
             self.subnets[prefix_size]
                 .get(&prefix.parse::<Ipv4Addr>().unwrap().into())
-                .map(|&subnet| subnet)
+                .map(|&prefix| {
+                    Subnet {
+                        prefix,
+                        prefix_size,
+                    }
+                })
         }
     }
 
