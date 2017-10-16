@@ -43,6 +43,7 @@ use std::str::FromStr;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::Ipv4Addr;
+use std::rc::Rc;
 use std::iter::FromIterator;
 use std::collections::{BTreeSet, Bound};
 use byteorder::{BigEndian, ByteOrder};
@@ -483,6 +484,15 @@ pub struct Subnet {
 }
 
 impl Subnet {
+    pub fn new(prefix: CompactIpv4, prefix_size: usize) -> Subnet {
+        let mut subnet = Subnet {
+            prefix,
+            prefix_size,
+        };
+        subnet.prefix &= subnet.mask();
+        subnet
+    }
+
     /// Tests if `self` contains the IP `addr`.
     pub fn contains<T: Into<CompactIpv4>>(&self, addr: T) -> bool {
         (addr.into() & self.mask()) == self.prefix
@@ -593,6 +603,129 @@ impl Error for ParseSubnetError {
 
     fn cause(&self) -> Option<&Error> {
         None
+    }
+}
+
+struct IpTrie {
+    root: Option<Rc<IpTrieNode>>,
+}
+
+impl IpTrie {
+    fn new() -> IpTrie {
+        IpTrie { root: None }
+    }
+
+    fn insert(&mut self, subnet: Subnet) {
+        if self.root.is_none() {
+            self.root = Some(Rc::new(IpTrieNode::new()))
+        }
+
+        let mut node = self.root.clone().unwrap();
+        let mut tmp_prefix = subnet.prefix.0;
+        for _ in 0..subnet.prefix_size {
+            let (prefix, overflow) = tmp_prefix.overflowing_shl(1);
+            tmp_prefix = prefix;
+            if overflow {
+                match node.one.clone() {
+                    Some(child) => node = child,
+                    None => {
+                        let new_node = Rc::new(IpTrieNode::new());
+                        Rc::get_mut(&mut node).unwrap().one = Some(new_node);
+                    }
+                }
+            } else {
+                match node.zero.clone() {
+                    Some(child) => node = child,
+                    None => {
+                        let new_node = Rc::new(IpTrieNode::new());
+                        Rc::get_mut(&mut node).unwrap().zero = Some(new_node);
+                    }
+                }
+            }
+        }
+    }
+
+    fn search(&self, subnet: Subnet) -> Option<Subnet> {
+        if self.root.is_none() {
+            return None;
+        }
+
+        let mut node = self.root.clone().unwrap();
+        let mut tmp_prefix = subnet.prefix.0;
+        for i in 0..subnet.prefix_size {
+            if node.one.is_none() && node.zero.is_none() {
+                return Some(Subnet::new(subnet.prefix, i));
+            }
+
+            let (prefix, overflow) = tmp_prefix.overflowing_shl(1);
+            tmp_prefix = prefix;
+
+            let child = if overflow {
+                node.one.clone()
+            } else {
+                node.zero.clone()
+            };
+
+            match child {
+                Some(child) => node = child,
+                None => return None,
+            }
+        }
+        unreachable!()
+    }
+
+    fn remove(&mut self, subnet: Subnet) {
+        if self.root.is_none() {
+            return;
+        }
+
+        let mut node = self.root.clone().unwrap();
+        let mut tmp_prefix = subnet.prefix.0;
+        for i in 0..subnet.prefix_size {
+            if node.one.is_none() && node.zero.is_none() {
+                let node = Rc::get_mut(&mut node).unwrap();
+                node.one = Some(Rc::new(IpTrieNode::new()));
+                node.zero = Some(Rc::new(IpTrieNode::new()));
+            }
+
+            let (prefix, overflow) = tmp_prefix.overflowing_shl(1);
+            tmp_prefix = prefix;
+
+            if i == subnet.prefix_size - 1 {
+                let node = Rc::get_mut(&mut node).unwrap();
+                if overflow {
+                    node.one = None;
+                } else {
+                    node.zero = None;
+                }
+            } else {
+                let child = if overflow {
+                    node.one.clone()
+                } else {
+                    node.zero.clone()
+                };
+
+                match child {
+                    Some(child) => node = child,
+                    None => return,
+                }
+            }
+        }
+        unreachable!()
+    }
+}
+
+struct IpTrieNode {
+    zero: Option<Rc<IpTrieNode>>,
+    one: Option<Rc<IpTrieNode>>,
+}
+
+impl IpTrieNode {
+    fn new() -> IpTrieNode {
+        IpTrieNode {
+            zero: None,
+            one: None,
+        }
     }
 }
 
