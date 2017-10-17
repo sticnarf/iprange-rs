@@ -580,8 +580,12 @@ impl IpTrie {
             self.root = Some(Rc::new(RefCell::new(IpTrieNode::new())))
         }
 
-        let mut node = self.root.clone().unwrap();
+        let mut node = self.root.clone().unwrap(); // The current node
+
+        // We care only the most significant bit of it.
+        // It is shifted left by 1 bit in each iteration of the loop.
         let mut prefix = subnet.prefix.0;
+
         for _ in 0..subnet.prefix_size {
             let i = (prefix >> 31) as usize;
             prefix <<= 1;
@@ -590,6 +594,8 @@ impl IpTrie {
             match child {
                 Some(child) => {
                     if child.borrow().is_leaf() {
+                        // This means the subnet to be inserted
+                        // is already in the trie.
                         return;
                     }
                     node = child;
@@ -630,6 +636,16 @@ impl IpTrie {
         } else {
             None
         }
+
+        // The commented code below is more clear. However, this uses a
+        // commented recursive method `search` in IpTrieNode, so the performance
+        // is relatively poorer that the implementation above.
+
+        // self.root.as_ref().and_then(|root| {
+        //     root.borrow()
+        //         .search(subnet.prefix.0, subnet.prefix_size)
+        //         .map(|prefix_size| Subnet::new(subnet.prefix, prefix_size))
+        // })
     }
 
     fn remove(&mut self, subnet: Subnet) {
@@ -684,6 +700,24 @@ impl IpTrieNode {
             self.children = [None, None];
         }
     }
+
+    // fn search(&self, prefix: u32, prefix_size: usize) -> Option<usize> {
+    //     let i = (prefix >> 31) as usize;
+    //     let prefix = prefix << 1;
+
+    //     if self.is_leaf() {
+    //         Some(0)
+    //     } else if prefix_size <= 0 {
+    //         None
+    //     } else {
+    //         self.children[i].clone().and_then(|child| {
+    //             child
+    //                 .borrow_mut()
+    //                 .search(prefix, prefix_size - 1)
+    //                 .map(|x| x + 1)
+    //         })
+    //     }
+    // }
 
     fn remove(&mut self, prefix: u32, prefix_size: usize) {
         let i = (prefix >> 31) as usize;
