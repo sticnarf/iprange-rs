@@ -32,7 +32,7 @@
 //! Currently, this library supports IPv4 only.
 //!
 //! [`IpRange`]: struct.IpRange.html
-//! [`Ipv4Net`]: ../ipnet/struct.Ipv4Net.html
+//! [`Ipv4Net`]: https://docs.rs/ipnet/1.0.0/ipnet/struct.Ipv4Net.html
 //! [`merge`]: struct.IpRange.html#method.merge
 //! [`intersect`]: struct.IpRange.html#method.intersect
 //! [`exclude`]: struct.IpRange.html#method.exclude
@@ -50,7 +50,6 @@ use ipnet::Ipv4Net;
 ///
 /// * [`add`]
 /// * [`remove`]
-/// * [`contains`]
 /// * [`includes`]
 /// * [`merge`]
 /// * [`intersect`]
@@ -240,7 +239,7 @@ impl<'a> IntoIterator for &'a IpRange {
 /// Anything that can be converted to `Ipv4Net`.
 ///
 /// Due to limitation of Rust's type system,
-/// this trait is onyl implmentaed for some
+/// this trait is only implemented for some
 /// concrete types.
 pub trait ToNetwork {
     fn to_network(self) -> Ipv4Net;
