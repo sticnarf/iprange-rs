@@ -1,7 +1,7 @@
 //! `iprange` is a library for managing IP ranges.
 //!
-//! An [`IpRange`] is a set of subnets.
-//! You can add or remove a [`Subnet`] from an [`IpRange`].
+//! An [`IpRange`] is a set of networks.
+//! You can add or remove a [`Ipv4Net`] from an [`IpRange`].
 //!
 //! It also supports these useful operations:
 //!
@@ -32,24 +32,21 @@
 //! Currently, this library supports IPv4 only.
 //!
 //! [`IpRange`]: struct.IpRange.html
-//! [`Subnet`]: struct.Subnet.html
+//! [`Ipv4Net`]: ../ipnet/struct.Ipv4Net.html
 //! [`merge`]: struct.IpRange.html#method.merge
 //! [`intersect`]: struct.IpRange.html#method.intersect
 //! [`exclude`]: struct.IpRange.html#method.exclude
 
-extern crate byteorder;
+extern crate ipnet;
 
-use std::str::FromStr;
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
 use std::net::Ipv4Addr;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::iter::FromIterator;
 use std::collections::VecDeque;
-use byteorder::{BigEndian, ByteOrder};
+use ipnet::Ipv4Net;
 
-/// A set of subnets that supports various operations:
+/// A set of networks that supports various operations:
 ///
 /// * [`add`]
 /// * [`remove`]
@@ -60,18 +57,24 @@ use byteorder::{BigEndian, ByteOrder};
 /// * [`exclude`]
 ///
 /// `IntoIter` is implemented for `&IpRange`. So, you can use `for`
-/// to iterate over the subnets in an `IpRange`:
+/// to iterate over the networks in an `IpRange`:
 ///
 /// ```
-/// use iprange::{IpRange, Subnet};
+/// extern crate ipnet;
+/// extern crate iprange;
 ///
-/// let ip_range: IpRange = ["172.16.0.0/16", "192.168.1.0/24"]
-///     .iter()
-///     .map(|s| s.parse::<Subnet>().unwrap())
-///     .collect();
+/// use iprange::IpRange;
+/// use ipnet::Ipv4Net;
 ///
-/// for subnet in &ip_range {
-///     println!("{:?}", subnet);
+/// fn main() {
+///     let ip_range: IpRange = ["172.16.0.0/16", "192.168.1.0/24"]
+///         .iter()
+///         .map(|s| s.parse::<Ipv4Net>().unwrap())
+///         .collect();
+///
+///     for network in &ip_range {
+///         println!("{:?}", network);
+///     }
 /// }
 /// ```
 ///
@@ -84,7 +87,7 @@ use byteorder::{BigEndian, ByteOrder};
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpRange {
-    // IpRange uses a radix trie to store IP subnets
+    // IpRange uses a radix trie to store networks
     trie: IpTrie,
 }
 
@@ -96,12 +99,12 @@ impl IpRange {
         }
     }
 
-    /// Add a subnet to `self`.
+    /// Add a network to `self`.
     ///
     /// Returns `&mut self` in order to enable method chaining.
     ///
     /// Pay attention that this operation will not combine two
-    /// subnets automatically. To do this, call [`simplify`] method
+    /// networks automatically. To do this, call [`simplify`] method
     /// explicitly. For example:
     ///
     /// ```
@@ -117,22 +120,18 @@ impl IpRange {
     /// ```
     ///
     /// [`simplify`]: struct.IpRange.html#method.simplify
-    pub fn add(&mut self, subnet: Subnet) -> &mut IpRange {
-        // if !self.includes(subnet) {
-        //     self.remove_inside(subnet);
-        //     self.subnets[subnet.prefix_size].insert(subnet.prefix);
-        // }
-        self.trie.insert(subnet);
+    pub fn add(&mut self, network: Ipv4Net) -> &mut IpRange {
+        self.trie.insert(network.trunc());
         self
     }
 
-    /// Remove a subnet from `self`.
+    /// Remove a network from `self`.
     ///
     /// Returns `&mut self` in order to enable method chaining.
     ///
-    /// `self` does not necessarily has exactly the subnet to be removed.
-    /// The subnet can be a subnet of a subnet in `self`.
-    /// This method will do splitting and remove the corresponding subnet.
+    /// `self` does not necessarily has exactly the network to be removed.
+    /// The network can be a networkwork of a network in `self`.
+    /// This method will do splitting and remove the corresponding network.
     /// For example:
     ///
     /// ```
@@ -141,20 +140,14 @@ impl IpRange {
     /// let mut ip_range = IpRange::new();
     /// ip_range.add("192.168.0.0/23".parse().unwrap())
     ///         .remove("192.168.0.0/24".parse().unwrap());
-    /// // Now, ip_range has only one subnet: "192.168.1.0/24".
+    /// // Now, ip_range has only one network: "192.168.1.0/24".
     /// ```
-    pub fn remove(&mut self, subnet: Subnet) -> &mut IpRange {
-        // self.remove_inside(subnet);
-
-        // while let Some(super_subnet) = self.super_subnet(subnet) {
-        //     self.split_subnet(super_subnet);
-        //     self.remove_subnet(subnet);
-        // }
-        self.trie.remove(subnet);
+    pub fn remove(&mut self, network: Ipv4Net) -> &mut IpRange {
+        self.trie.remove(network.trunc());
         self
     }
 
-    /// Simplify `self` by combining subnets. For example:
+    /// Simplify `self` by combining networks. For example:
     ///
     /// ```
     /// use iprange::IpRange;
@@ -169,13 +162,13 @@ impl IpRange {
     ///     .add("192.168.23.0/24".parse().unwrap())
     ///     .add("192.168.24.0/21".parse().unwrap())
     ///     .simplify();
-    /// // Now, ip_range has only one subnet: "192.168.0.0/19".
+    /// // Now, ip_range has only one network: "192.168.0.0/19".
     /// ```
     pub fn simplify(&mut self) {
         self.trie.simplify();
     }
 
-    /// Returns a new `IpRange` which contains all subnets
+    /// Returns a new `IpRange` which contains all networks
     /// that is either in `self` or in `other`.
     ///
     /// The returned `IpRange` is simplified.
@@ -183,55 +176,55 @@ impl IpRange {
         self.into_iter().chain(other.into_iter()).collect()
     }
 
-    /// Returns a new `IpRange` which contains all subnets
+    /// Returns a new `IpRange` which contains all networks
     /// that is in both `self` and `other`.
     ///
     /// The returned `IpRange` is simplified.
     pub fn intersect(&self, other: &IpRange) -> IpRange {
-        let range1 = self.into_iter().filter(|&subnet| other.includes(subnet));
-        let range2 = other.into_iter().filter(|&subnet| self.includes(subnet));
+        let range1 = self.into_iter().filter(|&network| other.includes(network));
+        let range2 = other.into_iter().filter(|&network| self.includes(network));
         range1.chain(range2).collect()
     }
 
-    /// Returns a new `IpRange` which contains all subnets
+    /// Returns a new `IpRange` which contains all networks
     /// that is in `self` while not in `other`.
     ///
     /// The returned `IpRange` is simplified.
     pub fn exclude(&self, other: &IpRange) -> IpRange {
         let mut new = self.clone();
-        for subnet in other {
-            new.remove(subnet);
+        for network in other {
+            new.remove(network);
         }
         new
     }
 
     /// Tests if `ip` is in `self`.
-    pub fn contains<T: Into<CompactIpv4>>(&self, ip: T) -> bool {
-        self.find_subnet(ip.into()).is_some()
+    pub fn contains<T: Into<Ipv4Addr>>(&self, ip: T) -> bool {
+        self.find(ip.into()).is_some()
     }
 
-    /// Tests if `self` includes `subnet`.
-    pub fn includes(&self, subnet: Subnet) -> bool {
-        self.super_subnet(subnet).is_some()
+    /// Tests if `self` includes `network`.
+    pub fn includes(&self, network: Ipv4Net) -> bool {
+        self.supernet(network).is_some()
     }
 
-    /// Returns the subnet in `self` that contains `ip`.
+    /// Returns the network in `self` that contains `ip`.
     ///
-    /// Returns None if no subnet in `self` contains `ip`.
-    pub fn find_subnet<T: Into<CompactIpv4>>(&self, ip: T) -> Option<Subnet> {
-        self.super_subnet(ip.into().into())
+    /// Returns None if no network in `self` contains `ip`.
+    pub fn find<T: Into<Ipv4Addr>>(&self, ip: T) -> Option<Ipv4Net> {
+        self.supernet(Ipv4Net::new(ip.into(), 32).unwrap())
     }
 
-    /// Returns the subnet in `self` which is the supernetwork of `subnet`.
+    /// Returns the network in `self` which is the supernetwork of `network`.
     ///
-    /// Returns None if no subnet in `self` includes `subnet`.
-    pub fn super_subnet(&self, subnet: Subnet) -> Option<Subnet> {
-        self.trie.search(subnet)
+    /// Returns None if no network in `self` includes `network`.
+    pub fn supernet(&self, network: Ipv4Net) -> Option<Ipv4Net> {
+        self.trie.search(network.trunc())
     }
 }
 
 impl<'a> IntoIterator for &'a IpRange {
-    type Item = Subnet;
+    type Item = Ipv4Net;
     type IntoIter = IpRangeIter;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -247,7 +240,7 @@ impl<'a> IntoIterator for &'a IpRange {
     }
 }
 
-/// An iterator over the subnets in an [`IpRange`].
+/// An iterator over the networks in an [`IpRange`].
 ///
 /// BFS (Breadth-First-Search) is used for traversing the inner Radix Trie.
 ///
@@ -259,22 +252,18 @@ pub struct IpRangeIter {
 struct IpRangeIterElem {
     node: Rc<RefCell<IpTrieNode>>,
     prefix: u32,
-    prefix_size: usize,
+    prefix_size: u8,
 }
 
 impl<'a> Iterator for IpRangeIter {
-    type Item = Subnet;
+    type Item = Ipv4Net;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(elem) = self.queue.pop_front() {
             // Get the front element of the queue.
-            // If it is a leaf, it represents a subnet
+            // If it is a leaf, it represents a network
             if elem.node.borrow().is_leaf() {
-                let subnet = Some(Subnet {
-                    prefix: CompactIpv4(elem.prefix),
-                    prefix_size: elem.prefix_size,
-                });
-                return subnet;
+                return Ipv4Net::new(elem.prefix.into(), elem.prefix_size).ok();
             }
             [0, 1].iter().for_each(|&i| {
                 if let Some(child) = elem.node.borrow().children[i as usize].as_ref() {
@@ -291,277 +280,31 @@ impl<'a> Iterator for IpRangeIter {
     }
 }
 
-impl FromIterator<Subnet> for IpRange {
+impl FromIterator<Ipv4Net> for IpRange {
     fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = Subnet>,
+        where
+            T: IntoIterator<Item = Ipv4Net>,
     {
         let mut ip_range = IpRange::new();
-        for subnet in iter {
-            ip_range.add(subnet);
+        for network in iter {
+            ip_range.add(network);
         }
         ip_range.simplify();
         ip_range
     }
 }
 
-impl<'a> FromIterator<&'a Subnet> for IpRange {
+impl<'a> FromIterator<&'a Ipv4Net> for IpRange {
     fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = &'a Subnet>,
+        where
+            T: IntoIterator<Item = &'a Ipv4Net>,
     {
         let mut ip_range = IpRange::new();
-        for subnet in iter {
-            ip_range.add(*subnet);
+        for network in iter {
+            ip_range.add(*network);
         }
         ip_range.simplify();
         ip_range
-    }
-}
-
-/// A wrapper of `u32` to represent an IPv4 address.
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct CompactIpv4(u32);
-
-impl std::ops::BitAnd for CompactIpv4 {
-    type Output = CompactIpv4;
-
-    fn bitand(self, other: CompactIpv4) -> CompactIpv4 {
-        CompactIpv4(self.0 & other.0)
-    }
-}
-
-impl std::ops::BitOr for CompactIpv4 {
-    type Output = CompactIpv4;
-
-    fn bitor(self, other: CompactIpv4) -> CompactIpv4 {
-        CompactIpv4(self.0 | other.0)
-    }
-}
-
-impl std::ops::BitXor for CompactIpv4 {
-    type Output = CompactIpv4;
-
-    fn bitxor(self, other: CompactIpv4) -> CompactIpv4 {
-        CompactIpv4(self.0 ^ other.0)
-    }
-}
-
-impl std::ops::Not for CompactIpv4 {
-    type Output = CompactIpv4;
-
-    fn not(self) -> CompactIpv4 {
-        CompactIpv4(!self.0)
-    }
-}
-
-impl std::ops::BitAndAssign for CompactIpv4 {
-    fn bitand_assign(&mut self, other: CompactIpv4) {
-        self.0 &= other.0;
-    }
-}
-
-impl std::ops::BitOrAssign for CompactIpv4 {
-    fn bitor_assign(&mut self, other: CompactIpv4) {
-        self.0 |= other.0;
-    }
-}
-
-impl std::ops::BitXorAssign for CompactIpv4 {
-    fn bitxor_assign(&mut self, other: CompactIpv4) {
-        self.0 ^= other.0;
-    }
-}
-
-impl From<Ipv4Addr> for CompactIpv4 {
-    fn from(addr: Ipv4Addr) -> CompactIpv4 {
-        CompactIpv4(BigEndian::read_u32(&addr.octets()))
-    }
-}
-
-impl From<u32> for CompactIpv4 {
-    fn from(addr: u32) -> CompactIpv4 {
-        CompactIpv4(addr)
-    }
-}
-
-impl Into<u32> for CompactIpv4 {
-    fn into(self: CompactIpv4) -> u32 {
-        self.0
-    }
-}
-
-impl fmt::Debug for CompactIpv4 {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let mut bytes = [0u8; 4];
-        BigEndian::write_u32(&mut bytes, self.0);
-        write!(f, "{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
-    }
-}
-
-impl CompactIpv4 {
-    /// This method returns the successor of `self`.
-    ///
-    /// If `self` does not have a successor, that is to say
-    /// `self` is `255.255.255.255`, then `None` is returned.
-    pub fn successor(self) -> Option<CompactIpv4> {
-        self.0.checked_add(1).map(|v| CompactIpv4(v))
-    }
-
-    /// This method returns the predecessor of `self`.
-    ///
-    /// If `self` does not have a predecessor, that is to say
-    /// `self` is `0.0.0.0`, then `None` is returned.
-    pub fn predecessor(self) -> Option<CompactIpv4> {
-        self.0.checked_sub(1).map(|v| CompactIpv4(v))
-    }
-}
-
-/// Represents a subdivision of an IP network.
-///
-/// We use CIDR notation to repesent a subnetwork.
-/// Thus, a `Subnet` is composed with a `prefix` and the size of the subnet
-/// written after a slash (`/`). The size of the subnet is
-/// represented by `prefix_size`, which is the count of leading ones
-/// in the subnet mask.
-///
-/// `Subnet` implements `FromStr` so that users can easily convert a
-/// string slice to a `Subnet`. Currently, two formats are supported:
-///
-/// * `a.b.c.d/prefix_size` (e.g. `10.0.0.0/8`)
-/// * `a.b.c.d/mask` (e.g. `192.168.0.0/255.255.255.0`)
-///
-/// The subnet will be automatically fixed after parsing. For example:
-/// parsing `172.16.32.1/16` results in `172.16.0.0/16`.
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub struct Subnet {
-    /// The prefix IP of the subnet
-    pub prefix: CompactIpv4,
-    /// The count of leading ones of the subnet mask
-    pub prefix_size: usize,
-}
-
-impl Subnet {
-    pub fn new(prefix: CompactIpv4, prefix_size: usize) -> Subnet {
-        let mut subnet = Subnet {
-            prefix,
-            prefix_size,
-        };
-        // Fix subnet
-        subnet.prefix &= subnet.mask();
-        subnet
-    }
-
-    /// Tests if `self` contains the IP `addr`.
-    pub fn contains<T: Into<CompactIpv4>>(&self, addr: T) -> bool {
-        (addr.into() & self.mask()) == self.prefix
-    }
-
-    /// Returns the last IP in `self`.
-    pub fn end(&self) -> CompactIpv4 {
-        self.prefix | !(self.mask())
-    }
-
-    /// Tests if `self` includes `other`, in other words,
-    /// `self` is a supernetwork of `other`.
-    pub fn includes(&self, other: Subnet) -> bool {
-        self.prefix <= other.prefix && self.end() >= other.end()
-    }
-
-    /// Returns the subnet mask of `self`.
-    pub fn mask(&self) -> CompactIpv4 {
-        CompactIpv4(
-            0xffffffffu32
-                .checked_shl(32 - self.prefix_size as u32)
-                .unwrap_or_default(), // The default value of u32 is 0
-        )
-    }
-}
-
-impl From<CompactIpv4> for Subnet {
-    fn from(ip: CompactIpv4) -> Subnet {
-        Subnet {
-            prefix: ip,
-            prefix_size: 32,
-        }
-    }
-}
-
-impl fmt::Debug for Subnet {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{:?}/{}", self.prefix, self.prefix_size)
-    }
-}
-
-impl FromStr for Subnet {
-    type Err = ParseSubnetError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.find('/')
-            .ok_or(ParseSubnetError::new("No slash found"))
-            .and_then(|slash| {
-                let prefix = s[..slash]
-                    .parse()
-                    .map(|addr: Ipv4Addr| addr.into())
-                    .map_err(|_| ParseSubnetError::new("Illegal prefix"));
-
-                let mask = s[(slash + 1)..]
-                    .parse()
-                    .map(|addr: Ipv4Addr| addr.into())
-                    .or_else(|_| {
-                        s[(slash + 1)..]
-                            .parse()
-                            .map_err(|_| ParseSubnetError::new("Unknown subnet format"))
-                            .and_then(|size: u32| if size == 32 {
-                                Ok(0xffffffffu32)
-                            } else {
-                                0xffffffffu32
-                                    .checked_shr(size) // Err when size > 32
-                                    .ok_or(ParseSubnetError::new("Prefix size out of range"))
-                                    .map(|x| !x)
-                            })
-                            .map(|mask| CompactIpv4(mask))
-                    });
-
-                prefix.and_then(|prefix: CompactIpv4| {
-                    mask.map(|mask| {
-                        Subnet {
-                            prefix: prefix & mask, // Fix subnet
-                            prefix_size: (32 - mask.0.trailing_zeros()) as usize,
-                        }
-                    })
-                })
-            })
-    }
-}
-
-/// An error which can be returned when parsing an subnet.
-#[derive(Debug)]
-pub struct ParseSubnetError {
-    reason: String,
-}
-
-impl ParseSubnetError {
-    fn new(reason: &str) -> ParseSubnetError {
-        ParseSubnetError {
-            reason: reason.to_owned(),
-        }
-    }
-}
-
-impl Display for ParseSubnetError {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        write!(f, "ParseSubnetError: {}", self.reason)
-    }
-}
-
-impl Error for ParseSubnetError {
-    fn description(&self) -> &str {
-        &self.reason
-    }
-
-    fn cause(&self) -> Option<&Error> {
-        None
     }
 }
 
@@ -575,7 +318,7 @@ impl IpTrie {
         IpTrie { root: None }
     }
 
-    fn insert(&mut self, subnet: Subnet) {
+    fn insert(&mut self, network: Ipv4Net) {
         if self.root.is_none() {
             self.root = Some(Rc::new(RefCell::new(IpTrieNode::new())))
         }
@@ -584,9 +327,9 @@ impl IpTrie {
 
         // We care only the most significant bit of it.
         // It is shifted left by 1 bit in each iteration of the loop.
-        let mut prefix = subnet.prefix.0;
+        let mut prefix: u32 = network.addr().into();
 
-        for _ in 0..subnet.prefix_size {
+        for _ in 0..network.prefix_len() {
             let i = (prefix >> 31) as usize;
             prefix <<= 1;
 
@@ -594,7 +337,7 @@ impl IpTrie {
             match child {
                 Some(child) => {
                     if child.borrow().is_leaf() {
-                        // This means the subnet to be inserted
+                        // This means the network to be inserted
                         // is already in the trie.
                         return;
                     }
@@ -610,15 +353,15 @@ impl IpTrie {
         (*node.borrow_mut()).children = [None, None];
     }
 
-    fn search(&self, subnet: Subnet) -> Option<Subnet> {
+    fn search(&self, network: Ipv4Net) -> Option<Ipv4Net> {
         if self.root.is_none() {
             return None;
         }
         let mut node = self.root.clone().unwrap();
-        let mut prefix = subnet.prefix.0;
-        for i in 0..subnet.prefix_size {
+        let mut prefix: u32 = network.addr().into();
+        for i in 0..network.prefix_len() {
             if node.borrow().is_leaf() {
-                return Some(Subnet::new(subnet.prefix, i));
+                return Ipv4Net::new(network.addr(), i).ok().map(|n| n.trunc());
             }
 
             let i = (prefix >> 31) as usize;
@@ -632,7 +375,7 @@ impl IpTrie {
         }
 
         if node.borrow().is_leaf() {
-            Some(subnet)
+            Some(network)
         } else {
             None
         }
@@ -641,17 +384,21 @@ impl IpTrie {
         // commented recursive method `search` in IpTrieNode, so the performance
         // is relatively poorer that the implementation above.
 
-        // self.root.as_ref().and_then(|root| {
-        //     root.borrow()
-        //         .search(subnet.prefix.0, subnet.prefix_size)
-        //         .map(|prefix_size| Subnet::new(subnet.prefix, prefix_size))
-        // })
+        //        self.root.as_ref().and_then(|root| {
+        //            root.borrow()
+        //                .search(network.addr().into(), network.prefix_len())
+        //                .and_then(|prefix_size| {
+        //                    Ipv4Net::new(network.addr(), prefix_size)
+        //                        .ok()
+        //                        .map(|n| n.trunc())
+        //                })
+        //        })
     }
 
-    fn remove(&mut self, subnet: Subnet) {
+    fn remove(&mut self, network: Ipv4Net) {
         if let Some(root) = self.root.as_ref() {
             root.borrow_mut()
-                .remove(subnet.prefix.0, subnet.prefix_size);
+                .remove(network.addr().into(), network.prefix_len());
         }
     }
 
@@ -675,7 +422,7 @@ impl IpTrieNode {
     }
 
     // If both the zero child and the one child of a node are None,
-    // it is a leaf node, and it represents a subnet whose
+    // it is a leaf node, and it represents a network whose
     // prefix is the path from root to it.
     fn is_leaf(&self) -> bool {
         self.children[0].is_none() && self.children[1].is_none()
@@ -701,29 +448,29 @@ impl IpTrieNode {
         }
     }
 
-    // fn search(&self, prefix: u32, prefix_size: usize) -> Option<usize> {
-    //     let i = (prefix >> 31) as usize;
-    //     let prefix = prefix << 1;
+    //    fn search(&self, prefix: u32, prefix_size: u8) -> Option<u8> {
+    //        let i = (prefix >> 31) as usize;
+    //        let prefix = prefix << 1;
+    //
+    //        if self.is_leaf() {
+    //            Some(0)
+    //        } else if prefix_size <= 0 {
+    //            None
+    //        } else {
+    //            self.children[i].clone().and_then(|child| {
+    //                child
+    //                    .borrow_mut()
+    //                    .search(prefix, prefix_size - 1)
+    //                    .map(|x| x + 1)
+    //            })
+    //        }
+    //    }
 
-    //     if self.is_leaf() {
-    //         Some(0)
-    //     } else if prefix_size <= 0 {
-    //         None
-    //     } else {
-    //         self.children[i].clone().and_then(|child| {
-    //             child
-    //                 .borrow_mut()
-    //                 .search(prefix, prefix_size - 1)
-    //                 .map(|x| x + 1)
-    //         })
-    //     }
-    // }
-
-    fn remove(&mut self, prefix: u32, prefix_size: usize) {
+    fn remove(&mut self, prefix: u32, prefix_size: u8) {
         let i = (prefix >> 31) as usize;
         let prefix = prefix << 1;
 
-        // If the current node is a leaf node, and we have a subnet
+        // If the current node is a leaf node, and we have a network
         // to remove, we must split it into two deeper nodes.
         if self.is_leaf() {
             self.children = [
@@ -732,7 +479,7 @@ impl IpTrieNode {
             ];
         }
 
-        // Remove the node that represents the subnet.
+        // Remove the node that represents the network.
         if prefix_size == 1 {
             self.children[i] = None;
             return;
@@ -743,8 +490,8 @@ impl IpTrieNode {
             child.borrow_mut().remove(prefix, prefix_size - 1);
 
             // In general, a leaf node represents a complete
-            // subnet. However, the child node cannot be a complete
-            // subnet after removing a subnet from it.
+            // network. However, the child node cannot be a complete
+            // network after removing a network from it.
             // This occurring indicates the only child of the
             // child node is removed, and now this child node
             // should be marked None.
@@ -760,88 +507,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_subnet_cidr() {
-        let my_subnet: Subnet = "192.168.5.130/24".parse().unwrap();
-        assert_eq!(
-            my_subnet,
-            Subnet {
-                prefix: 0b11000000_10101000_00000101_00000000.into(),
-                prefix_size: 24,
-            }
-        );
-    }
-
-    #[test]
-    fn parse_subnet_with_only_one_ip() {
-        let my_subnet: Subnet = "233.233.233.233/32".parse().unwrap();
-        assert_eq!(
-            my_subnet,
-            Subnet {
-                prefix: 0b11101001_11101001_11101001_11101001.into(),
-                prefix_size: 32,
-            }
-        );
-    }
-
-    #[test]
-    fn parse_subnet_with_mask() {
-        let my_subnet: Subnet = "192.168.5.130/255.255.255.192".parse().unwrap();
-        assert_eq!(
-            my_subnet,
-            Subnet {
-                prefix: 0b11000000_10101000_00000101_10000000.into(),
-                prefix_size: 26,
-            }
-        );
-    }
-
-    #[test]
-    fn parse_invalid_subnets() {
-        assert!("192.168.256.130/5".parse::<Subnet>().is_err());
-        assert!("192.168.5.130/-1".parse::<Subnet>().is_err());
-        assert!("192.168.5.130/33".parse::<Subnet>().is_err());
-        assert!("192.168.5.33".parse::<Subnet>().is_err());
-        assert!("192.168.5.130/0.0.0".parse::<Subnet>().is_err());
-        assert!("192.168.5.130/0.0.0.256".parse::<Subnet>().is_err());
+    fn parse_invalid_networks() {
+        assert!("192.168.256.130/5".parse::<Ipv4Net>().is_err());
+        assert!("192.168.5.130/-1".parse::<Ipv4Net>().is_err());
+        assert!("192.168.5.130/33".parse::<Ipv4Net>().is_err());
+        assert!("192.168.5.33".parse::<Ipv4Net>().is_err());
+        assert!("192.168.5.130/0.0.0".parse::<Ipv4Net>().is_err());
+        assert!("192.168.5.130/0.0.0.256".parse::<Ipv4Net>().is_err());
     }
 
     impl IpRange {
-        fn get_subnet(&self, prefix_size: usize, prefix: &str) -> Option<Subnet> {
-            self.trie.search(Subnet {
-                prefix: prefix.parse::<Ipv4Addr>().unwrap().into(),
-                prefix_size,
-            })
+        fn get_network(&self, prefix_size: usize, prefix: &str) -> Option<Ipv4Net> {
+            self.trie
+                .search(format!("{}/{}", prefix, prefix_size).parse().unwrap())
         }
     }
 
     #[test]
-    fn add_single_subnet() {
+    fn add_single_network() {
         let mut ip_range = IpRange::new();
-        let subnet = "192.168.5.130/24".parse().unwrap();
-        ip_range.add(subnet);
+        let network = "192.168.5.0/24".parse().unwrap();
+        ip_range.add(network);
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet), ip_range.get_subnet(24, "192.168.5.0"));
+        assert_eq!(Some(network), ip_range.get_network(24, "192.168.5.0"));
     }
 
     #[test]
-    fn add_multiple_subnets_disjoint() {
+    fn add_multiple_networks_disjoint() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "10.0.0.1/8".parse().unwrap();
-        let subnet2 = "172.16.5.130/16".parse().unwrap();
-        let subnet3 = "192.168.1.1/24".parse().unwrap();
-        let subnet4 = "254.254.254.254/32".parse().unwrap();
+        let network1 = "10.0.0.0/8".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        let network3 = "192.168.1.0/24".parse().unwrap();
+        let network4 = "254.254.254.254/32".parse().unwrap();
         ip_range
-            .add(subnet1)
-            .add(subnet2)
-            .add(subnet3)
-            .add(subnet4)
+            .add(network1)
+            .add(network2)
+            .add(network3)
+            .add(network4)
             .simplify();
 
         assert_eq!(ip_range.into_iter().count(), 4);
-        assert_eq!(Some(subnet1), ip_range.get_subnet(8, "10.0.0.0"));
-        assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
-        assert_eq!(Some(subnet3), ip_range.get_subnet(24, "192.168.1.0"));
-        assert_eq!(Some(subnet4), ip_range.get_subnet(32, "254.254.254.254"));
+        assert_eq!(Some(network1), ip_range.get_network(8, "10.0.0.0"));
+        assert_eq!(Some(network2), ip_range.get_network(16, "172.16.0.0"));
+        assert_eq!(Some(network3), ip_range.get_network(24, "192.168.1.0"));
+        assert_eq!(Some(network4), ip_range.get_network(32, "254.254.254.254"));
     }
 
 
@@ -861,91 +570,91 @@ mod tests {
         assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(
             "192.168.0.0/19".parse().ok(),
-            ip_range.get_subnet(19, "192.168.0.0")
+            ip_range.get_network(19, "192.168.0.0")
         );
     }
 
 
     #[test]
-    fn add_multiple_subnets_joint1() {
+    fn add_multiple_networks_joint1() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "172.16.4.130/24".parse().unwrap();
-        let subnet2 = "172.16.5.130/22".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2).simplify();
+        let network1 = "172.16.4.0/24".parse().unwrap();
+        let network2 = "172.16.4.0/22".parse().unwrap();
+        ip_range.add(network1).add(network2).simplify();
 
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
+        assert_eq!(Some(network2), ip_range.get_network(22, "172.16.4.0"));
     }
 
     #[test]
-    fn add_multiple_subnets_joint2() {
+    fn add_multiple_networks_joint2() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "172.16.5.130/24".parse().unwrap();
-        let subnet2 = "172.16.4.130/22".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2).simplify();
+        let network1 = "172.16.5.0/24".parse().unwrap();
+        let network2 = "172.16.4.0/22".parse().unwrap();
+        ip_range.add(network1).add(network2).simplify();
 
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
+        assert_eq!(Some(network2), ip_range.get_network(22, "172.16.4.0"));
     }
 
     #[test]
-    fn add_multiple_subnets_joint3() {
+    fn add_multiple_networks_joint3() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "172.16.4.130/24".parse().unwrap();
-        let subnet2 = "172.16.5.130/22".parse().unwrap();
-        ip_range.add(subnet2).add(subnet1).simplify();
+        let network1 = "172.16.4.0/24".parse().unwrap();
+        let network2 = "172.16.4.0/22".parse().unwrap();
+        ip_range.add(network2).add(network1).simplify();
 
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
+        assert_eq!(Some(network2), ip_range.get_network(22, "172.16.4.0"));
     }
 
     #[test]
-    fn add_multiple_subnets_joint4() {
+    fn add_multiple_networks_joint4() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "172.16.5.130/24".parse().unwrap();
-        let subnet2 = "172.16.5.131/24".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2).simplify();
+        let network1 = "172.16.5.0/24".parse().unwrap();
+        let network2 = "172.16.5.0/24".parse().unwrap();
+        ip_range.add(network1).add(network2).simplify();
 
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(24, "172.16.5.0"));
+        assert_eq!(Some(network2), ip_range.get_network(24, "172.16.5.0"));
     }
 
     #[test]
-    fn add_multiple_subnets_joint5() {
+    fn add_multiple_networks_joint5() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "172.16.5.130/24".parse().unwrap();
-        let subnet2 = "172.16.5.131/16".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2).simplify();
+        let network1 = "172.16.5.0/24".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        ip_range.add(network1).add(network2).simplify();
 
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
+        assert_eq!(Some(network2), ip_range.get_network(16, "172.16.0.0"));
     }
 
     #[test]
-    fn add_multiple_subnets_joint6() {
+    fn add_multiple_networks_joint6() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "172.16.5.130/24".parse().unwrap();
-        let subnet2 = "0.0.0.0/0".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2).simplify();
+        let network1 = "172.16.5.0/24".parse().unwrap();
+        let network2 = "0.0.0.0/0".parse().unwrap();
+        ip_range.add(network1).add(network2).simplify();
 
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(0, "0.0.0.0"));
+        assert_eq!(Some(network2), ip_range.get_network(0, "0.0.0.0"));
     }
 
     #[test]
-    fn remove_subnets_no_split() {
+    fn remove_networks_no_split() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "192.168.0.0/24".parse().unwrap();
-        let subnet2 = "172.16.0.0/16".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2).simplify();
+        let network1 = "192.168.0.0/24".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        ip_range.add(network1).add(network2).simplify();
 
-        ip_range.remove(subnet1);
+        ip_range.remove(network1);
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
+        assert_eq!(Some(network2), ip_range.get_network(16, "172.16.0.0"));
     }
 
     #[test]
-    fn remove_subnets_split1() {
+    fn remove_networks_split1() {
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/22".parse().unwrap());
         ip_range
@@ -955,12 +664,12 @@ mod tests {
         assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(
             Some("192.168.0.0/23".parse().unwrap()),
-            ip_range.get_subnet(23, "192.168.0.0")
+            ip_range.get_network(23, "192.168.0.0")
         );
     }
 
     #[test]
-    fn remove_subnets_split2() {
+    fn remove_networks_split2() {
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/22".parse().unwrap());
         ip_range
@@ -970,12 +679,12 @@ mod tests {
         assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(
             Some("192.168.2.0/23".parse().unwrap()),
-            ip_range.get_subnet(23, "192.168.2.0")
+            ip_range.get_network(23, "192.168.2.0")
         );
     }
 
     #[test]
-    fn remove_subnets_split3() {
+    fn remove_networks_split3() {
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/22".parse().unwrap());
         ip_range
@@ -985,15 +694,15 @@ mod tests {
         assert_eq!(ip_range.into_iter().count(), 3);
         assert_eq!(
             Some("192.168.0.0/23".parse().unwrap()),
-            ip_range.get_subnet(23, "192.168.0.0")
+            ip_range.get_network(23, "192.168.0.0")
         );
         assert_eq!(
             Some("192.168.2.128/25".parse().unwrap()),
-            ip_range.get_subnet(25, "192.168.2.128")
+            ip_range.get_network(25, "192.168.2.128")
         );
         assert_eq!(
             Some("192.168.3.0/24".parse().unwrap()),
-            ip_range.get_subnet(24, "192.168.3.0")
+            ip_range.get_network(24, "192.168.3.0")
         );
     }
 
@@ -1003,21 +712,21 @@ mod tests {
             self.contains(ip.parse::<Ipv4Addr>().unwrap())
         }
 
-        fn find_subnet_by_ip(&self, ip: &str) -> Option<Subnet> {
-            self.find_subnet(ip.parse::<Ipv4Addr>().unwrap())
+        fn find_network_by_ip(&self, ip: &str) -> Option<Ipv4Net> {
+            self.find(ip.parse::<Ipv4Addr>().unwrap())
         }
 
-        fn includes_subnet(&self, subnet: &str) -> bool {
-            self.includes(subnet.parse().unwrap())
+        fn includes_network(&self, network: &str) -> bool {
+            self.includes(network.parse().unwrap())
         }
 
-        fn super_subnet_by_subnet(&self, subnet: &str) -> Option<Subnet> {
-            self.super_subnet(subnet.parse().unwrap())
+        fn super_network_by_network(&self, network: &str) -> Option<Ipv4Net> {
+            self.supernet(network.parse().unwrap())
         }
     }
 
     #[test]
-    fn contains_ip_with_one_subnet() {
+    fn contains_ip_with_one_network() {
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/24".parse().unwrap());
 
@@ -1029,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn contains_ip_with_many_subnets() {
+    fn contains_ip_with_many_networks() {
         let mut ip_range = IpRange::new();
         ip_range
             .add("192.168.0.0/24".parse().unwrap())
@@ -1070,74 +779,81 @@ mod tests {
     }
 
     #[test]
-    fn find_subnet_with_one_subnet() {
+    fn find_network_with_one_network() {
         let mut ip_range = IpRange::new();
-        let subnet = "192.168.0.0/24".parse().unwrap();
-        ip_range.add(subnet);
+        let network = "192.168.0.0/24".parse().unwrap();
+        ip_range.add(network);
 
-        assert_eq!(Some(subnet), ip_range.find_subnet_by_ip("192.168.0.0"));
-        assert_eq!(Some(subnet), ip_range.find_subnet_by_ip("192.168.0.128"));
-        assert_eq!(Some(subnet), ip_range.find_subnet_by_ip("192.168.0.255"));
-        assert_eq!(None, ip_range.find_subnet_by_ip("192.167.255.255"));
-        assert_eq!(None, ip_range.find_subnet_by_ip("192.168.1.0"));
+        assert_eq!(Some(network), ip_range.find_network_by_ip("192.168.0.0"));
+        assert_eq!(Some(network), ip_range.find_network_by_ip("192.168.0.128"));
+        assert_eq!(Some(network), ip_range.find_network_by_ip("192.168.0.255"));
+        assert_eq!(None, ip_range.find_network_by_ip("192.167.255.255"));
+        assert_eq!(None, ip_range.find_network_by_ip("192.168.1.0"));
     }
 
     #[test]
-    fn find_subnet_with_many_subnets() {
+    fn find_network_with_many_networks() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "192.168.0.0/24".parse().unwrap();
-        let subnet2 = "172.16.0.0/16".parse().unwrap();
-        let subnet3 = "10.0.0.0/8".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2).add(subnet3).simplify();
+        let network1 = "192.168.0.0/24".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        let network3 = "10.0.0.0/8".parse().unwrap();
+        ip_range
+            .add(network1)
+            .add(network2)
+            .add(network3)
+            .simplify();
 
-        assert_eq!(Some(subnet1), ip_range.find_subnet_by_ip("192.168.0.128"));
-        assert_eq!(Some(subnet2), ip_range.find_subnet_by_ip("172.16.32.1"));
-        assert_eq!(Some(subnet3), ip_range.find_subnet_by_ip("10.10.10.10"));
-        assert_eq!(None, ip_range.find_subnet_by_ip("0.0.0.0"));
-        assert_eq!(None, ip_range.find_subnet_by_ip("8.8.8.8"));
-        assert_eq!(None, ip_range.find_subnet_by_ip("11.0.0.0"));
-        assert_eq!(None, ip_range.find_subnet_by_ip("192.167.255.255"));
-        assert_eq!(None, ip_range.find_subnet_by_ip("255.255.255.255"));
+        assert_eq!(Some(network1), ip_range.find_network_by_ip("192.168.0.128"));
+        assert_eq!(Some(network2), ip_range.find_network_by_ip("172.16.32.1"));
+        assert_eq!(Some(network3), ip_range.find_network_by_ip("10.10.10.10"));
+        assert_eq!(None, ip_range.find_network_by_ip("0.0.0.0"));
+        assert_eq!(None, ip_range.find_network_by_ip("8.8.8.8"));
+        assert_eq!(None, ip_range.find_network_by_ip("11.0.0.0"));
+        assert_eq!(None, ip_range.find_network_by_ip("192.167.255.255"));
+        assert_eq!(None, ip_range.find_network_by_ip("255.255.255.255"));
     }
 
     #[test]
-    fn find_subnet_boundary1() {
+    fn find_network_boundary1() {
         let mut ip_range = IpRange::new();
-        let subnet = "0.0.0.0/0".parse().unwrap();
-        ip_range.add(subnet);
+        let network = "0.0.0.0/0".parse().unwrap();
+        ip_range.add(network);
 
-        assert_eq!(Some(subnet), ip_range.find_subnet_by_ip("0.0.0.0"));
-        assert_eq!(Some(subnet), ip_range.find_subnet_by_ip("8.8.8.8"));
-        assert_eq!(Some(subnet), ip_range.find_subnet_by_ip("192.168.0.0"));
-        assert_eq!(Some(subnet), ip_range.find_subnet_by_ip("192.168.1.1"));
+        assert_eq!(Some(network), ip_range.find_network_by_ip("0.0.0.0"));
+        assert_eq!(Some(network), ip_range.find_network_by_ip("8.8.8.8"));
+        assert_eq!(Some(network), ip_range.find_network_by_ip("192.168.0.0"));
+        assert_eq!(Some(network), ip_range.find_network_by_ip("192.168.1.1"));
     }
 
     #[test]
-    fn find_subnet_boundary2() {
+    fn find_network_boundary2() {
         let mut ip_range = IpRange::new();
-        let subnet = "254.254.254.254/32".parse().unwrap();
-        ip_range.add(subnet);
+        let network = "254.254.254.254/32".parse().unwrap();
+        ip_range.add(network);
 
-        assert_eq!(None, ip_range.find_subnet_by_ip("0.0.0.0"));
-        assert_eq!(None, ip_range.find_subnet_by_ip("8.8.8.8"));
-        assert_eq!(None, ip_range.find_subnet_by_ip("192.168.0.0"));
-        assert_eq!(Some(subnet), ip_range.find_subnet_by_ip("254.254.254.254"));
+        assert_eq!(None, ip_range.find_network_by_ip("0.0.0.0"));
+        assert_eq!(None, ip_range.find_network_by_ip("8.8.8.8"));
+        assert_eq!(None, ip_range.find_network_by_ip("192.168.0.0"));
+        assert_eq!(
+            Some(network),
+            ip_range.find_network_by_ip("254.254.254.254")
+        );
     }
 
     #[test]
-    fn includes_subnet_with_one_subnet() {
+    fn includes_network_with_one_network() {
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/24".parse().unwrap());
 
-        assert!(ip_range.includes_subnet("192.168.0.0/24"));
-        assert!(ip_range.includes_subnet("192.168.0.128/25"));
-        assert!(!ip_range.includes_subnet("192.168.0.0/23"));
-        assert!(!ip_range.includes_subnet("192.168.1.0/24"));
-        assert!(!ip_range.includes_subnet("192.167.0.0/24"));
+        assert!(ip_range.includes_network("192.168.0.0/24"));
+        assert!(ip_range.includes_network("192.168.0.128/25"));
+        assert!(!ip_range.includes_network("192.168.0.0/23"));
+        assert!(!ip_range.includes_network("192.168.1.0/24"));
+        assert!(!ip_range.includes_network("192.167.0.0/24"));
     }
 
     #[test]
-    fn includes_subnet_with_many_subnets() {
+    fn includes_network_with_many_networks() {
         let mut ip_range = IpRange::new();
         ip_range
             .add("192.168.0.0/24".parse().unwrap())
@@ -1145,236 +861,255 @@ mod tests {
             .add("10.0.0.0/8".parse().unwrap())
             .simplify();
 
-        assert!(ip_range.includes_subnet("192.168.0.128/25"));
-        assert!(ip_range.includes_subnet("172.16.32.0/20"));
-        assert!(ip_range.includes_subnet("10.10.0.0/16"));
-        assert!(!ip_range.includes_subnet("0.0.0.0/0"));
-        assert!(!ip_range.includes_subnet("8.0.0.0/6"));
-        assert!(!ip_range.includes_subnet("8.0.0.0/7"));
-        assert!(!ip_range.includes_subnet("11.0.0.0/9"));
-        assert!(!ip_range.includes_subnet("192.167.255.255/32"));
-        assert!(!ip_range.includes_subnet("255.0.0.0/8"));
+        assert!(ip_range.includes_network("192.168.0.128/25"));
+        assert!(ip_range.includes_network("172.16.32.0/20"));
+        assert!(ip_range.includes_network("10.10.0.0/16"));
+        assert!(!ip_range.includes_network("0.0.0.0/0"));
+        assert!(!ip_range.includes_network("8.0.0.0/6"));
+        assert!(!ip_range.includes_network("8.0.0.0/7"));
+        assert!(!ip_range.includes_network("11.0.0.0/9"));
+        assert!(!ip_range.includes_network("192.167.255.255/32"));
+        assert!(!ip_range.includes_network("255.0.0.0/8"));
     }
 
     #[test]
-    fn includes_subnet_boundary1() {
+    fn includes_network_boundary1() {
         let mut ip_range = IpRange::new();
         ip_range.add("0.0.0.0/0".parse().unwrap());
 
-        assert!(ip_range.includes_subnet("0.0.0.0/0"));
-        assert!(ip_range.includes_subnet("8.0.0.0/6"));
-        assert!(ip_range.includes_subnet("11.0.0.0/9"));
-        assert!(ip_range.includes_subnet("192.168.0.128/25"));
-        assert!(ip_range.includes_subnet("255.255.255.255/32"));
+        assert!(ip_range.includes_network("0.0.0.0/0"));
+        assert!(ip_range.includes_network("8.0.0.0/6"));
+        assert!(ip_range.includes_network("11.0.0.0/9"));
+        assert!(ip_range.includes_network("192.168.0.128/25"));
+        assert!(ip_range.includes_network("255.255.255.255/32"));
     }
 
     #[test]
-    fn includes_subnet_boundary2() {
+    fn includes_network_boundary2() {
         let mut ip_range = IpRange::new();
         ip_range.add("254.254.254.254/32".parse().unwrap());
 
-        assert!(!ip_range.includes_subnet("0.0.0.0/0"));
-        assert!(!ip_range.includes_subnet("8.0.0.0/6"));
-        assert!(!ip_range.includes_subnet("254.254.0.0/16"));
-        assert!(ip_range.includes_subnet("254.254.254.254/32"));
-        assert!(!ip_range.includes_subnet("255.255.255.255/32"));
+        assert!(!ip_range.includes_network("0.0.0.0/0"));
+        assert!(!ip_range.includes_network("8.0.0.0/6"));
+        assert!(!ip_range.includes_network("254.254.0.0/16"));
+        assert!(ip_range.includes_network("254.254.254.254/32"));
+        assert!(!ip_range.includes_network("255.255.255.255/32"));
     }
 
     #[test]
-    fn super_subnet_with_one_subnet() {
+    fn super_network_with_one_network() {
         let mut ip_range = IpRange::new();
-        let subnet = "192.168.0.0/24".parse().unwrap();
-        ip_range.add(subnet);
+        let network = "192.168.0.0/24".parse().unwrap();
+        ip_range.add(network);
 
         assert_eq!(
-            Some(subnet),
-            ip_range.super_subnet_by_subnet("192.168.0.0/24")
+            Some(network),
+            ip_range.super_network_by_network("192.168.0.0/24")
         );
         assert_eq!(
-            Some(subnet),
-            ip_range.super_subnet_by_subnet("192.168.0.128/25")
+            Some(network),
+            ip_range.super_network_by_network("192.168.0.128/25")
         );
-        assert_eq!(None, ip_range.super_subnet_by_subnet("192.168.0.0/23"));
-        assert_eq!(None, ip_range.super_subnet_by_subnet("192.168.1.0/24"));
-        assert_eq!(None, ip_range.super_subnet_by_subnet("192.167.0.0/24"));
+        assert_eq!(None, ip_range.super_network_by_network("192.168.0.0/23"));
+        assert_eq!(None, ip_range.super_network_by_network("192.168.1.0/24"));
+        assert_eq!(None, ip_range.super_network_by_network("192.167.0.0/24"));
     }
 
     #[test]
-    fn super_subnet_with_many_subnets() {
+    fn super_network_with_many_networks() {
         let mut ip_range = IpRange::new();
-        let subnet1 = "192.168.0.0/24".parse().unwrap();
-        let subnet2 = "172.16.0.0/16".parse().unwrap();
-        let subnet3 = "10.0.0.0/8".parse().unwrap();
-        ip_range.add(subnet1).add(subnet2).add(subnet3).simplify();
+        let network1 = "192.168.0.0/24".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        let network3 = "10.0.0.0/8".parse().unwrap();
+        ip_range
+            .add(network1)
+            .add(network2)
+            .add(network3)
+            .simplify();
 
         assert_eq!(
-            Some(subnet1),
-            ip_range.super_subnet_by_subnet("192.168.0.128/25")
+            Some(network1),
+            ip_range.super_network_by_network("192.168.0.128/25")
         );
         assert_eq!(
-            Some(subnet2),
-            ip_range.super_subnet_by_subnet("172.16.32.0/20")
+            Some(network2),
+            ip_range.super_network_by_network("172.16.32.0/20")
         );
         assert_eq!(
-            Some(subnet3),
-            ip_range.super_subnet_by_subnet("10.10.0.0/16")
+            Some(network3),
+            ip_range.super_network_by_network("10.10.0.0/16")
         );
-        assert_eq!(None, ip_range.super_subnet_by_subnet("0.0.0.0/0"));
-        assert_eq!(None, ip_range.super_subnet_by_subnet("8.0.0.0/6"));
-        assert_eq!(None, ip_range.super_subnet_by_subnet("8.0.0.0/7"));
-        assert_eq!(None, ip_range.super_subnet_by_subnet("11.0.0.0/9"));
-        assert_eq!(None, ip_range.super_subnet_by_subnet("192.167.255.255/32"));
-        assert_eq!(None, ip_range.super_subnet_by_subnet("255.0.0.0/8"));
+        assert_eq!(None, ip_range.super_network_by_network("0.0.0.0/0"));
+        assert_eq!(None, ip_range.super_network_by_network("8.0.0.0/6"));
+        assert_eq!(None, ip_range.super_network_by_network("8.0.0.0/7"));
+        assert_eq!(None, ip_range.super_network_by_network("11.0.0.0/9"));
+        assert_eq!(
+            None,
+            ip_range.super_network_by_network("192.167.255.255/32")
+        );
+        assert_eq!(None, ip_range.super_network_by_network("255.0.0.0/8"));
     }
 
     #[test]
-    fn super_subnet_boundary1() {
+    fn super_network_boundary1() {
         let mut ip_range = IpRange::new();
-        let subnet = "0.0.0.0/0".parse().unwrap();
-        ip_range.add(subnet);
+        let network = "0.0.0.0/0".parse().unwrap();
+        ip_range.add(network);
 
-        assert_eq!(Some(subnet), ip_range.super_subnet_by_subnet("0.0.0.0/0"));
-        assert_eq!(Some(subnet), ip_range.super_subnet_by_subnet("8.0.0.0/6"));
-        assert_eq!(Some(subnet), ip_range.super_subnet_by_subnet("11.0.0.0/9"));
         assert_eq!(
-            Some(subnet),
-            ip_range.super_subnet_by_subnet("192.168.0.128/25")
+            Some(network),
+            ip_range.super_network_by_network("0.0.0.0/0")
         );
         assert_eq!(
-            Some(subnet),
-            ip_range.super_subnet_by_subnet("255.255.255.255/32")
+            Some(network),
+            ip_range.super_network_by_network("8.0.0.0/6")
+        );
+        assert_eq!(
+            Some(network),
+            ip_range.super_network_by_network("11.0.0.0/9")
+        );
+        assert_eq!(
+            Some(network),
+            ip_range.super_network_by_network("192.168.0.128/25")
+        );
+        assert_eq!(
+            Some(network),
+            ip_range.super_network_by_network("255.255.255.255/32")
         );
     }
 
     #[test]
-    fn super_subnet_boundary2() {
+    fn super_network_boundary2() {
         let mut ip_range = IpRange::new();
-        let subnet = "254.254.254.254/32".parse().unwrap();
-        ip_range.add(subnet);
+        let network = "254.254.254.254/32".parse().unwrap();
+        ip_range.add(network);
 
-        assert_eq!(None, ip_range.super_subnet_by_subnet("0.0.0.0/0"));
-        assert_eq!(None, ip_range.super_subnet_by_subnet("8.0.0.0/6"));
-        assert_eq!(None, ip_range.super_subnet_by_subnet("254.254.0.0/16"));
+        assert_eq!(None, ip_range.super_network_by_network("0.0.0.0/0"));
+        assert_eq!(None, ip_range.super_network_by_network("8.0.0.0/6"));
+        assert_eq!(None, ip_range.super_network_by_network("254.254.0.0/16"));
         assert_eq!(
-            Some(subnet),
-            ip_range.super_subnet_by_subnet("254.254.254.254/32")
+            Some(network),
+            ip_range.super_network_by_network("254.254.254.254/32")
         );
-        assert_eq!(None, ip_range.super_subnet_by_subnet("255.255.255.255/32"));
+        assert_eq!(
+            None,
+            ip_range.super_network_by_network("255.255.255.255/32")
+        );
     }
 
     #[test]
     fn merge_empty1() {
         let ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "10.0.0.1/8".parse().unwrap();
-        let subnet2 = "172.16.5.130/16".parse().unwrap();
-        let subnet3 = "192.168.1.1/24".parse().unwrap();
-        let subnet4 = "254.254.254.254/32".parse().unwrap();
+        let network1 = "10.0.0.0/8".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        let network3 = "192.168.1.0/24".parse().unwrap();
+        let network4 = "254.254.254.254/32".parse().unwrap();
         ip_range2
-            .add(subnet1)
-            .add(subnet2)
-            .add(subnet3)
-            .add(subnet4)
+            .add(network1)
+            .add(network2)
+            .add(network3)
+            .add(network4)
             .simplify();
 
         let ip_range = ip_range1.merge(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 4);
-        assert_eq!(Some(subnet1), ip_range.get_subnet(8, "10.0.0.0"));
-        assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
-        assert_eq!(Some(subnet3), ip_range.get_subnet(24, "192.168.1.0"));
-        assert_eq!(Some(subnet4), ip_range.get_subnet(32, "254.254.254.254"));
+        assert_eq!(Some(network1), ip_range.get_network(8, "10.0.0.0"));
+        assert_eq!(Some(network2), ip_range.get_network(16, "172.16.0.0"));
+        assert_eq!(Some(network3), ip_range.get_network(24, "192.168.1.0"));
+        assert_eq!(Some(network4), ip_range.get_network(32, "254.254.254.254"));
     }
 
     #[test]
     fn merge_empty2() {
         let mut ip_range1 = IpRange::new();
         let ip_range2 = IpRange::new();
-        let subnet1 = "10.0.0.1/8".parse().unwrap();
-        let subnet2 = "172.16.5.130/16".parse().unwrap();
-        let subnet3 = "192.168.1.1/24".parse().unwrap();
-        let subnet4 = "254.254.254.254/32".parse().unwrap();
+        let network1 = "10.0.0.0/8".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        let network3 = "192.168.1.0/24".parse().unwrap();
+        let network4 = "254.254.254.254/32".parse().unwrap();
         ip_range1
-            .add(subnet1)
-            .add(subnet2)
-            .add(subnet3)
-            .add(subnet4)
+            .add(network1)
+            .add(network2)
+            .add(network3)
+            .add(network4)
             .simplify();
 
         let ip_range = ip_range1.merge(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 4);
-        assert_eq!(Some(subnet1), ip_range.get_subnet(8, "10.0.0.0"));
-        assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
-        assert_eq!(Some(subnet3), ip_range.get_subnet(24, "192.168.1.0"));
-        assert_eq!(Some(subnet4), ip_range.get_subnet(32, "254.254.254.254"));
+        assert_eq!(Some(network1), ip_range.get_network(8, "10.0.0.0"));
+        assert_eq!(Some(network2), ip_range.get_network(16, "172.16.0.0"));
+        assert_eq!(Some(network3), ip_range.get_network(24, "192.168.1.0"));
+        assert_eq!(Some(network4), ip_range.get_network(32, "254.254.254.254"));
     }
 
     #[test]
     fn merge_disjoint() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "10.0.0.1/8".parse().unwrap();
-        let subnet2 = "172.16.5.130/16".parse().unwrap();
-        let subnet3 = "192.168.1.1/24".parse().unwrap();
-        let subnet4 = "254.254.254.254/32".parse().unwrap();
-        ip_range1.add(subnet1).add(subnet2);
-        ip_range2.add(subnet3).add(subnet4);
+        let network1 = "10.0.0.0/8".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        let network3 = "192.168.1.0/24".parse().unwrap();
+        let network4 = "254.254.254.254/32".parse().unwrap();
+        ip_range1.add(network1).add(network2);
+        ip_range2.add(network3).add(network4);
 
         let ip_range = ip_range1.merge(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 4);
-        assert_eq!(Some(subnet1), ip_range.get_subnet(8, "10.0.0.0"));
-        assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
-        assert_eq!(Some(subnet3), ip_range.get_subnet(24, "192.168.1.0"));
-        assert_eq!(Some(subnet4), ip_range.get_subnet(32, "254.254.254.254"));
+        assert_eq!(Some(network1), ip_range.get_network(8, "10.0.0.0"));
+        assert_eq!(Some(network2), ip_range.get_network(16, "172.16.0.0"));
+        assert_eq!(Some(network3), ip_range.get_network(24, "192.168.1.0"));
+        assert_eq!(Some(network4), ip_range.get_network(32, "254.254.254.254"));
     }
 
     #[test]
     fn merge_joint1() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.4.130/24".parse().unwrap();
-        let subnet2 = "172.16.5.130/22".parse().unwrap();
-        ip_range1.add(subnet1);
-        ip_range2.add(subnet2);
+        let network1 = "172.16.4.0/24".parse().unwrap();
+        let network2 = "172.16.4.0/22".parse().unwrap();
+        ip_range1.add(network1);
+        ip_range2.add(network2);
 
         let ip_range = ip_range1.merge(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
+        assert_eq!(Some(network2), ip_range.get_network(22, "172.16.4.0"));
     }
 
     #[test]
     fn merge_joint2() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.5.130/24".parse().unwrap();
-        let subnet2 = "172.16.4.130/22".parse().unwrap();
-        ip_range1.add(subnet1);
-        ip_range2.add(subnet2);
+        let network1 = "172.16.5.0/24".parse().unwrap();
+        let network2 = "172.16.4.0/22".parse().unwrap();
+        ip_range1.add(network1);
+        ip_range2.add(network2);
 
         let ip_range = ip_range1.merge(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
+        assert_eq!(Some(network2), ip_range.get_network(22, "172.16.4.0"));
     }
 
     #[test]
     fn merge_sequent1() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.4.0/24".parse().unwrap();
-        let subnet2 = "172.16.5.0/24".parse().unwrap();
-        let subnet3 = "172.16.6.0/24".parse().unwrap();
-        ip_range1.add(subnet1);
-        ip_range2.add(subnet2);
-        ip_range2.add(subnet3);
+        let network1 = "172.16.4.0/24".parse().unwrap();
+        let network2 = "172.16.5.0/24".parse().unwrap();
+        let network3 = "172.16.6.0/24".parse().unwrap();
+        ip_range1.add(network1);
+        ip_range2.add(network2);
+        ip_range2.add(network3);
 
         let ip_range = ip_range1.merge(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 2);
         assert_eq!(
             "172.16.4.0/23".parse().ok(),
-            ip_range.get_subnet(23, "172.16.4.0")
+            ip_range.get_network(23, "172.16.4.0")
         );
         assert_eq!(
             "172.16.6.0/24".parse().ok(),
-            ip_range.get_subnet(24, "172.16.6.0")
+            ip_range.get_network(24, "172.16.6.0")
         );
     }
 
@@ -1398,7 +1133,7 @@ mod tests {
         assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(
             "192.168.0.0/19".parse().ok(),
-            ip_range.get_subnet(19, "192.168.0.0")
+            ip_range.get_network(19, "192.168.0.0")
         );
     }
 
@@ -1406,12 +1141,12 @@ mod tests {
     fn intersect_disjoint() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "10.0.0.1/8".parse().unwrap();
-        let subnet2 = "172.16.5.130/16".parse().unwrap();
-        let subnet3 = "192.168.1.1/24".parse().unwrap();
-        let subnet4 = "254.254.254.254/32".parse().unwrap();
-        ip_range1.add(subnet1).add(subnet2);
-        ip_range2.add(subnet3).add(subnet4);
+        let network1 = "10.0.0.0/8".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        let network3 = "192.168.1.0/24".parse().unwrap();
+        let network4 = "254.254.254.254/32".parse().unwrap();
+        ip_range1.add(network1).add(network2);
+        ip_range2.add(network3).add(network4);
 
         let ip_range = ip_range1.intersect(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 0);
@@ -1421,73 +1156,73 @@ mod tests {
     fn intersect_joint1() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.4.130/24".parse().unwrap();
-        let subnet2 = "172.16.5.130/22".parse().unwrap();
-        ip_range1.add(subnet1);
-        ip_range2.add(subnet2);
+        let network1 = "172.16.4.0/24".parse().unwrap();
+        let network2 = "172.16.4.0/22".parse().unwrap();
+        ip_range1.add(network1);
+        ip_range2.add(network2);
 
         let ip_range = ip_range1.intersect(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet1), ip_range.get_subnet(24, "172.16.4.0"));
+        assert_eq!(Some(network1), ip_range.get_network(24, "172.16.4.0"));
     }
 
     #[test]
     fn intersect_joint2() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.5.130/24".parse().unwrap();
-        let subnet2 = "172.16.4.130/22".parse().unwrap();
-        ip_range1.add(subnet1);
-        ip_range2.add(subnet2);
+        let network1 = "172.16.5.0/24".parse().unwrap();
+        let network2 = "172.16.4.0/22".parse().unwrap();
+        ip_range1.add(network1);
+        ip_range2.add(network2);
 
         let ip_range = ip_range1.intersect(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet1), ip_range.get_subnet(24, "172.16.5.0"));
+        assert_eq!(Some(network1), ip_range.get_network(24, "172.16.5.0"));
     }
 
     #[test]
     fn intersect_joint3() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.5.130/24".parse().unwrap();
-        let subnet2 = "172.16.5.130/24".parse().unwrap();
-        ip_range1.add(subnet1);
-        ip_range2.add(subnet2);
+        let network1 = "172.16.5.0/24".parse().unwrap();
+        let network2 = "172.16.5.0/24".parse().unwrap();
+        ip_range1.add(network1);
+        ip_range2.add(network2);
 
         let ip_range = ip_range1.intersect(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet1), ip_range.get_subnet(24, "172.16.5.0"));
+        assert_eq!(Some(network1), ip_range.get_network(24, "172.16.5.0"));
     }
 
     #[test]
     fn intersect_joint4() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "10.0.0.0/8".parse().unwrap();
-        let subnet2 = "192.168.0.0/24".parse().unwrap();
-        let subnet3 = "10.10.0.0/16".parse().unwrap();
-        let subnet4 = "10.254.0.0/17".parse().unwrap();
-        let subnet5 = "192.168.0.0/16".parse().unwrap();
-        ip_range1.add(subnet1).add(subnet2);
-        ip_range2.add(subnet3).add(subnet4).add(subnet5);
+        let network1 = "10.0.0.0/8".parse().unwrap();
+        let network2 = "192.168.0.0/24".parse().unwrap();
+        let network3 = "10.10.0.0/16".parse().unwrap();
+        let network4 = "10.254.0.0/17".parse().unwrap();
+        let network5 = "192.168.0.0/16".parse().unwrap();
+        ip_range1.add(network1).add(network2);
+        ip_range2.add(network3).add(network4).add(network5);
 
         let ip_range = ip_range1.intersect(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 3);
-        assert_eq!(Some(subnet3), ip_range.get_subnet(16, "10.10.0.0"));
-        assert_eq!(Some(subnet4), ip_range.get_subnet(17, "10.254.0.0"));
-        assert_eq!(Some(subnet2), ip_range.get_subnet(24, "192.168.0.0"));
+        assert_eq!(Some(network3), ip_range.get_network(16, "10.10.0.0"));
+        assert_eq!(Some(network4), ip_range.get_network(17, "10.254.0.0"));
+        assert_eq!(Some(network2), ip_range.get_network(24, "192.168.0.0"));
     }
 
     #[test]
     fn exclude_disjoint() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "10.0.0.1/8".parse().unwrap();
-        let subnet2 = "172.16.5.130/16".parse().unwrap();
-        let subnet3 = "192.168.1.1/24".parse().unwrap();
-        let subnet4 = "254.254.254.254/32".parse().unwrap();
-        ip_range1.add(subnet1).add(subnet2);
-        ip_range2.add(subnet3).add(subnet4);
+        let network1 = "10.0.0.0/8".parse().unwrap();
+        let network2 = "172.16.0.0/16".parse().unwrap();
+        let network3 = "192.168.1.0/24".parse().unwrap();
+        let network4 = "254.254.254.254/32".parse().unwrap();
+        ip_range1.add(network1).add(network2);
+        ip_range2.add(network3).add(network4);
 
         let ip_range = ip_range1.exclude(&ip_range2);
         assert_eq!(ip_range1, ip_range);
@@ -1497,56 +1232,56 @@ mod tests {
     fn exclude_larger() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.4.130/24".parse().unwrap();
-        let subnet2 = "192.168.1.0/24".parse().unwrap();
-        let subnet3 = "172.16.5.130/22".parse().unwrap();
-        ip_range1.add(subnet1).add(subnet2);
-        ip_range2.add(subnet3);
+        let network1 = "172.16.4.0/24".parse().unwrap();
+        let network2 = "192.168.1.0/24".parse().unwrap();
+        let network3 = "172.16.4.0/22".parse().unwrap();
+        ip_range1.add(network1).add(network2);
+        ip_range2.add(network3);
 
         let ip_range = ip_range1.exclude(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(24, "192.168.1.0"));
+        assert_eq!(Some(network2), ip_range.get_network(24, "192.168.1.0"));
     }
 
     #[test]
     fn exclude_identical() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.5.130/24".parse().unwrap();
-        let subnet2 = "192.168.1.0/24".parse().unwrap();
-        let subnet3 = "172.16.5.130/22".parse().unwrap();
-        let subnet4 = "10.0.0.0/8".parse().unwrap();
+        let network1 = "172.16.5.0/24".parse().unwrap();
+        let network2 = "192.168.1.0/24".parse().unwrap();
+        let network3 = "172.16.4.0/22".parse().unwrap();
+        let network4 = "10.0.0.0/8".parse().unwrap();
 
-        ip_range1.add(subnet1).add(subnet2);
-        ip_range2.add(subnet3).add(subnet4);
+        ip_range1.add(network1).add(network2);
+        ip_range2.add(network3).add(network4);
 
         let ip_range = ip_range1.exclude(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 1);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(24, "192.168.1.0"));
+        assert_eq!(Some(network2), ip_range.get_network(24, "192.168.1.0"));
     }
 
     #[test]
     fn exclude_split1() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.5.0/22".parse().unwrap();
-        let subnet2 = "192.168.1.0/24".parse().unwrap();
-        let subnet3 = "172.16.5.130/24".parse().unwrap();
-        let subnet4 = "10.0.0.0/8".parse().unwrap();
+        let network1 = "172.16.4.0/22".parse().unwrap();
+        let network2 = "192.168.1.0/24".parse().unwrap();
+        let network3 = "172.16.5.0/24".parse().unwrap();
+        let network4 = "10.0.0.0/8".parse().unwrap();
 
-        ip_range1.add(subnet1).add(subnet2);
-        ip_range2.add(subnet3).add(subnet4);
+        ip_range1.add(network1).add(network2);
+        ip_range2.add(network3).add(network4);
 
         let ip_range = ip_range1.exclude(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 3);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(24, "192.168.1.0"));
+        assert_eq!(Some(network2), ip_range.get_network(24, "192.168.1.0"));
         assert_eq!(
             "172.16.4.0/24".parse().ok(),
-            ip_range.get_subnet(24, "172.16.4.0")
+            ip_range.get_network(24, "172.16.4.0")
         );
         assert_eq!(
             "172.16.6.0/23".parse().ok(),
-            ip_range.get_subnet(23, "172.16.6.0")
+            ip_range.get_network(23, "172.16.6.0")
         );
     }
 
@@ -1554,24 +1289,24 @@ mod tests {
     fn exclude_split2() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let subnet1 = "172.16.4.0/22".parse().unwrap();
-        let subnet2 = "192.168.1.0/24".parse().unwrap();
-        let subnet3 = "172.16.4.0/24".parse().unwrap();
-        let subnet4 = "10.0.0.0/8".parse().unwrap();
+        let network1 = "172.16.4.0/22".parse().unwrap();
+        let network2 = "192.168.1.0/24".parse().unwrap();
+        let network3 = "172.16.4.0/24".parse().unwrap();
+        let network4 = "10.0.0.0/8".parse().unwrap();
 
-        ip_range1.add(subnet1).add(subnet2);
-        ip_range2.add(subnet3).add(subnet4);
+        ip_range1.add(network1).add(network2);
+        ip_range2.add(network3).add(network4);
 
         let ip_range = ip_range1.exclude(&ip_range2);
         assert_eq!(ip_range.into_iter().count(), 3);
-        assert_eq!(Some(subnet2), ip_range.get_subnet(24, "192.168.1.0"));
+        assert_eq!(Some(network2), ip_range.get_network(24, "192.168.1.0"));
         assert_eq!(
             "172.16.5.0/24".parse().ok(),
-            ip_range.get_subnet(24, "172.16.5.0")
+            ip_range.get_network(24, "172.16.5.0")
         );
         assert_eq!(
             "172.16.6.0/23".parse().ok(),
-            ip_range.get_subnet(23, "172.16.6.0")
+            ip_range.get_network(23, "172.16.6.0")
         );
     }
 }

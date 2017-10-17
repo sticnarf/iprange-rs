@@ -1,10 +1,13 @@
 #![feature(test)]
 
+extern crate ipnet;
 extern crate iprange;
 extern crate rand;
 extern crate test;
+
 use test::Bencher;
 use iprange::*;
+use ipnet::Ipv4Net;
 use std::net::Ipv4Addr;
 use std::fs::File;
 use std::path::PathBuf;
@@ -17,13 +20,8 @@ fn parse_one_ip(b: &mut Bencher) {
 }
 
 #[bench]
-fn parse_one_subnet1(b: &mut Bencher) {
-    b.iter(|| "192.168.0.0/24".parse::<Subnet>());
-}
-
-#[bench]
-fn parse_one_subnet2(b: &mut Bencher) {
-    b.iter(|| "192.168.0.0/255.255.255.0".parse::<Subnet>());
+fn parse_one_subnet(b: &mut Bencher) {
+    b.iter(|| "192.168.0.0/24".parse::<Ipv4Net>().unwrap());
 }
 
 fn chnlists() -> Vec<String> {
@@ -34,7 +32,7 @@ fn chnlists() -> Vec<String> {
     reader.lines().flat_map(|l| l).collect()
 }
 
-fn rand_ip_list(n: usize) -> Vec<CompactIpv4> {
+fn rand_ip_list(n: usize) -> Vec<Ipv4Addr> {
     let mut rng = StdRng::from_seed(&[1926, 8, 17]);
     (0..n).map(|_| rng.next_u32().into()).collect()
 }
@@ -43,7 +41,7 @@ fn rand_ip_list(n: usize) -> Vec<CompactIpv4> {
 fn parse_chnlists(b: &mut Bencher) {
     let lines = chnlists();
     b.iter(|| for line in &lines {
-        line.parse::<Subnet>().ok();
+        line.parse::<Ipv4Net>().ok();
     });
 }
 
@@ -58,7 +56,7 @@ fn create_ip_range_with_chnlists(b: &mut Bencher) {
     b.iter(|| {
         chnlists
             .iter()
-            .flat_map(|l| l.parse::<Subnet>())
+            .flat_map(|l| l.parse::<Ipv4Net>())
             .collect::<IpRange>()
     });
 }
@@ -68,7 +66,7 @@ fn test_10000_ips_in_chnlists(b: &mut Bencher) {
     let ip_list = rand_ip_list(10000);
     let chnlists = chnlists()
         .iter()
-        .flat_map(|l| l.parse::<Subnet>())
+        .flat_map(|l| l.parse::<Ipv4Net>())
         .collect::<IpRange>();
     b.iter(|| for &ip in &ip_list {
         chnlists.contains(ip);
