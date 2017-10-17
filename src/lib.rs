@@ -44,9 +44,9 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::Ipv4Addr;
 use std::rc::Rc;
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::iter::FromIterator;
-use std::collections::{BTreeSet, Bound};
+use std::collections::{BTreeSet, Bound, VecDeque};
 use byteorder::{BigEndian, ByteOrder};
 
 /// A set of subnets that supports various operations.
@@ -299,20 +299,31 @@ impl IpRange {
 
 impl<'a> IntoIterator for &'a IpRange {
     type Item = Subnet;
-    type IntoIter = IpRangeIter<'a>;
+    type IntoIter = IpRangeIter;
 
     fn into_iter(self) -> Self::IntoIter {
+        // IpRangeIter {
+        //     iter: Box::new(self.subnets.iter().enumerate().flat_map(
+        //         |(prefix_size, s)| {
+        //             s.iter().map(move |&prefix| {
+        //                 Subnet {
+        //                     prefix,
+        //                     prefix_size,
+        //                 }
+        //             })
+        //         },
+        //     )),
+        // }
+        let mut queue = VecDeque::new();
+        if let Some(root) = self.trie.root.as_ref() {
+            queue.push_back(IpRangeIterElem {
+                node: root.clone(),
+                prefix: 0,
+                prefix_size: 0
+            });
+        }
         IpRangeIter {
-            iter: Box::new(self.subnets.iter().enumerate().flat_map(
-                |(prefix_size, s)| {
-                    s.iter().map(move |&prefix| {
-                        Subnet {
-                            prefix,
-                            prefix_size,
-                        }
-                    })
-                },
-            )),
+            queue
         }
     }
 }
@@ -320,24 +331,56 @@ impl<'a> IntoIterator for &'a IpRange {
 /// An iterator over the subnets in an [`IpRange`].
 ///
 /// [`IpRange`]: struct.IpRange.html
-pub struct IpRangeIter<'a> {
-    iter: Box<Iterator<Item = Subnet> + 'a>,
+pub struct IpRangeIter {
+    // iter: Box<Iterator<Item = Subnet> + 'a>,
+    queue: VecDeque<IpRangeIterElem>
 }
 
-impl<'a> Iterator for IpRangeIter<'a> {
+struct IpRangeIterElem {
+    node: Rc<RefCell<IpTrieNode>>,
+    prefix: u32,
+    prefix_size: usize
+}
+
+impl<'a> Iterator for IpRangeIter {
     type Item = Subnet;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        while let Some(elem) = self.queue.pop_front() {
+            if elem.node.borrow().is_leaf() {
+                let subnet = 
+                 Some(Subnet {
+                    prefix: CompactIpv4(elem.prefix),
+                    prefix_size: elem.prefix_size
+                });
+                println!("{:?}",subnet);
+                return subnet;
+            }
+            if let Some(one) = elem.node.borrow().one.as_ref() {
+                self.queue.push_back(IpRangeIterElem {
+                node: one.clone(),
+                prefix: elem.prefix | (1<<(31-elem.prefix_size)),
+                prefix_size: elem.prefix_size + 1
+            })
+            }
+            if let Some(zero) = elem.node.borrow().zero.as_ref() {
+                self.queue.push_back(IpRangeIterElem {
+                node: zero.clone(),
+                prefix: elem.prefix,
+                prefix_size: elem.prefix_size + 1
+            })
+            }
+        }
+        None
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
-    }
+    // fn size_hint(&self) -> (usize, Option<usize>) {
+    //     self.iter.size_hint()
+    // }
 
-    fn count(self) -> usize {
-        self.iter.count()
-    }
+    // fn count(self) -> usize {
+    //     self.iter.count()
+    // }
 }
 
 impl FromIterator<Subnet> for IpRange {
@@ -699,40 +742,41 @@ impl IpTrie {
             return;
         }
 
-        let mut node = self.root.clone().unwrap();
-        let mut tmp_prefix = subnet.prefix.0;
-        for i in 0..subnet.prefix_size {
-            if node.borrow().is_leaf() {
-                let mut node = node.borrow_mut();
-                node.one = Some(Rc::new(RefCell::new(IpTrieNode::new())));
-                node.zero = Some(Rc::new(RefCell::new(IpTrieNode::new())));
-            }
+        let node = self.root.clone().unwrap();
+        node.borrow_mut().remove(subnet.prefix.0, subnet.prefix_size);
+        // let mut tmp_prefix = subnet.prefix.0;
+        // for i in 0..subnet.prefix_size {
+        //     if node.borrow().is_leaf() {
+        //         let mut node = node.borrow_mut();
+        //         node.one = Some(Rc::new(RefCell::new(IpTrieNode::new())));
+        //         node.zero = Some(Rc::new(RefCell::new(IpTrieNode::new())));
+        //     }
 
-            let (prefix, overflow) = tmp_prefix.overflowing_mul(2);
-            tmp_prefix = prefix;
+        //     let (prefix, overflow) = tmp_prefix.overflowing_mul(2);
+        //     tmp_prefix = prefix;
 
-            if i == subnet.prefix_size - 1 {
-                let mut node = node.borrow_mut();
-                if overflow {
-                    node.one = None;
-                } else {
-                    node.zero = None;
-                }
-                return;
-            } else {
-                let child = if overflow {
-                    node.borrow().one.clone()
-                } else {
-                    node.borrow().zero.clone()
-                };
+        //     if i == subnet.prefix_size - 1 {
+        //         let mut node = node.borrow_mut();
+        //         if overflow {
+        //             node.one = None;
+        //         } else {
+        //             node.zero = None;
+        //         }
+        //         return;
+        //     } else {
+        //         let child = if overflow {
+        //             node.borrow().one.clone()
+        //         } else {
+        //             node.borrow().zero.clone()
+        //         };
 
-                match child {
-                    Some(child) => node = child,
-                    None => return,
-                }
-            }
-        }
-        unreachable!()
+        //         match child {
+        //             Some(child) => node = child,
+        //             None => return,
+        //         }
+        //     }
+        // }
+        // unreachable!()
     }
 
     fn simplify(&mut self) {
@@ -761,22 +805,53 @@ impl IpTrieNode {
     }
 
     fn simplify(&mut self) {
-        let mut can = 0;
+        let mut leaf_count = 0;
         if let Some(zero) = self.zero.as_ref() {
             zero.borrow_mut().simplify();
             if zero.borrow().is_leaf() {
-                can += 1;
+                leaf_count += 1;
             }
         }
         if let Some(one) = self.one.as_ref() {
             one.borrow_mut().simplify();
             if one.borrow().is_leaf() {
-                can += 1;
+                leaf_count += 1;
             }
         }
-        if can == 2 {
+        if leaf_count == 2 {
             self.one = None;
             self.zero = None;
+        }
+    }
+
+    fn remove(&mut self, prefix: u32, prefix_size: usize) {
+        let (prefix, overflow) = prefix.overflowing_mul(2);
+        if self.is_leaf() {
+            self.one = Some(Rc::new(RefCell::new(IpTrieNode::new())));
+            self.zero = Some(Rc::new(RefCell::new(IpTrieNode::new())));
+        }
+        if prefix_size == 1 {
+            if overflow {
+                self.one = None;
+            }else {
+                self.zero = None;
+            }
+            return;
+        }
+        if overflow {
+            if let Some(child) = self.one.clone() {
+                child.borrow_mut().remove(prefix, prefix_size-1);
+                if child.borrow().is_leaf() {
+                    self.one = None;
+                }
+            }
+        }else{
+            if let Some(child) = self.zero.clone() {
+                child.borrow_mut().remove(prefix, prefix_size-1);
+                if child.borrow().is_leaf() {
+                    self.zero = None;
+                }
+            }
         }
     }
 }
@@ -853,7 +928,7 @@ mod tests {
         let mut ip_range = IpRange::new();
         let subnet = "192.168.5.130/24".parse().unwrap();
         ip_range.add(subnet);
-        // assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(Some(subnet), ip_range.get_subnet(24, "192.168.5.0"));
     }
     
@@ -871,7 +946,7 @@ mod tests {
             .add(subnet4)
             .simplify();
 
-        //assert_eq!(ip_range.into_iter().count(), 4);
+        assert_eq!(ip_range.into_iter().count(), 4);
         assert_eq!(Some(subnet1), ip_range.get_subnet(8, "10.0.0.0"));
         assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
         assert_eq!(Some(subnet3), ip_range.get_subnet(24, "192.168.1.0"));
@@ -892,7 +967,7 @@ mod tests {
             .add("192.168.24.0/21".parse().unwrap())
             .simplify();
 
-        // assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(
             "192.168.0.0/19".parse().ok(),
             ip_range.get_subnet(19, "192.168.0.0")
@@ -907,7 +982,7 @@ mod tests {
         let subnet2 = "172.16.5.130/22".parse().unwrap();
         ip_range.add(subnet1).add(subnet2).simplify();
 
-        // assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
     }
 
@@ -918,7 +993,7 @@ mod tests {
         let subnet2 = "172.16.4.130/22".parse().unwrap();
         ip_range.add(subnet1).add(subnet2).simplify();
 
-        // assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
     }
 
@@ -929,7 +1004,7 @@ mod tests {
         let subnet2 = "172.16.5.130/22".parse().unwrap();
         ip_range.add(subnet2).add(subnet1).simplify();
 
-        // assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(Some(subnet2), ip_range.get_subnet(22, "172.16.4.0"));
     }
 
@@ -940,7 +1015,7 @@ mod tests {
         let subnet2 = "172.16.5.131/24".parse().unwrap();
         ip_range.add(subnet1).add(subnet2).simplify();
 
-        // assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(Some(subnet2), ip_range.get_subnet(24, "172.16.5.0"));
     }
 
@@ -951,7 +1026,7 @@ mod tests {
         let subnet2 = "172.16.5.131/16".parse().unwrap();
         ip_range.add(subnet1).add(subnet2).simplify();
 
-        // assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
     }
 
@@ -962,7 +1037,7 @@ mod tests {
         let subnet2 = "0.0.0.0/0".parse().unwrap();
         ip_range.add(subnet1).add(subnet2).simplify();
 
-        // assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(Some(subnet2), ip_range.get_subnet(0, "0.0.0.0"));
     }
 
@@ -974,7 +1049,7 @@ mod tests {
         ip_range.add(subnet1).add(subnet2).simplify();
 
         ip_range.remove(subnet1);
-        //assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(Some(subnet2), ip_range.get_subnet(16, "172.16.0.0"));
     }
 
@@ -986,7 +1061,7 @@ mod tests {
             .remove("192.168.2.0/23".parse().unwrap())
             .simplify();
 
-        //assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(
             Some("192.168.0.0/23".parse().unwrap()),
             ip_range.get_subnet(23, "192.168.0.0")
@@ -1001,7 +1076,7 @@ mod tests {
             .remove("192.168.0.0/23".parse().unwrap())
             .simplify();
 
-        //assert_eq!(ip_range.into_iter().count(), 1);
+        assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(
             Some("192.168.2.0/23".parse().unwrap()),
             ip_range.get_subnet(23, "192.168.2.0")
@@ -1016,7 +1091,7 @@ mod tests {
             .remove("192.168.2.0/25".parse().unwrap())
             .simplify();
 
-        //assert_eq!(ip_range.into_iter().count(), 3);
+        assert_eq!(ip_range.into_iter().count(), 3);
         assert_eq!(
             Some("192.168.0.0/23".parse().unwrap()),
             ip_range.get_subnet(23, "192.168.0.0")
@@ -1295,7 +1370,7 @@ mod tests {
         );
         assert_eq!(None, ip_range.super_subnet_by_subnet("255.255.255.255/32"));
     }
-/*
+
     #[test]
     fn merge_empty1() {
         let ip_range1 = IpRange::new();
@@ -1608,5 +1683,5 @@ mod tests {
             ip_range.get_subnet(23, "172.16.6.0")
         );
     }
-    */
+    
 }
