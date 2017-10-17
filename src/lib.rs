@@ -43,8 +43,10 @@ use std::str::FromStr;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::net::Ipv4Addr;
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::iter::FromIterator;
-use std::collections::{BTreeSet, Bound};
+use std::collections::VecDeque;
 use byteorder::{BigEndian, ByteOrder};
 
 /// A set of subnets that supports various operations.
@@ -68,14 +70,14 @@ use byteorder::{BigEndian, ByteOrder};
 pub struct IpRange {
     // The index of the Vec is the prefix size of the subnets
     // which the corresponding BTreeMap contains
-    subnets: Vec<BTreeSet<CompactIpv4>>,
+    trie: IpTrie,
 }
 
 impl IpRange {
     /// Creates an empty `IpRange`.
     pub fn new() -> IpRange {
         IpRange {
-            subnets: (0..33).map(|_| BTreeSet::new()).collect(),
+            trie: IpTrie::new(),
         }
     }
 
@@ -101,10 +103,11 @@ impl IpRange {
     ///
     /// [`simplify`]: struct.IpRange.html#method.simplify
     pub fn add(&mut self, subnet: Subnet) -> &mut IpRange {
-        if !self.includes(subnet) {
-            self.remove_inside(subnet);
-            self.subnets[subnet.prefix_size].insert(subnet.prefix);
-        }
+        // if !self.includes(subnet) {
+        //     self.remove_inside(subnet);
+        //     self.subnets[subnet.prefix_size].insert(subnet.prefix);
+        // }
+        self.trie.insert(subnet);
         self
     }
 
@@ -126,12 +129,13 @@ impl IpRange {
     /// // Now, ip_range has only one subnet: "192.168.1.0/24".
     /// ```
     pub fn remove(&mut self, subnet: Subnet) -> &mut IpRange {
-        self.remove_inside(subnet);
+        // self.remove_inside(subnet);
 
-        while let Some(super_subnet) = self.super_subnet(subnet) {
-            self.split_subnet(super_subnet);
-            self.remove_subnet(subnet);
-        }
+        // while let Some(super_subnet) = self.super_subnet(subnet) {
+        //     self.split_subnet(super_subnet);
+        //     self.remove_subnet(subnet);
+        // }
+        self.trie.remove(subnet);
         self
     }
 
@@ -153,33 +157,7 @@ impl IpRange {
     /// // Now, ip_range has only one subnet: "192.168.0.0/19".
     /// ```
     pub fn simplify(&mut self) {
-        let mut to_be_added = Vec::new();
-        for (prefix_size, subnets) in self.subnets.iter_mut().enumerate().rev() {
-            for &prefix in &to_be_added {
-                subnets.insert(prefix);
-            }
-            to_be_added.clear();
-
-            if subnets.len() < 2 {
-                continue;
-            }
-            let larger_mask = 0xffffffffu32
-                .checked_shl(33 - prefix_size as u32)
-                .unwrap_or_default();
-
-            let mut to_be_removed = Vec::new();
-            for (&prefix1, &prefix2) in subnets.iter().zip(subnets.iter().skip(1)) {
-                if prefix1.0 & larger_mask == prefix1.0 && prefix2.0 & larger_mask == prefix1.0 {
-                    to_be_removed.push(prefix1);
-                    to_be_removed.push(prefix2);
-                    to_be_added.push(prefix1);
-                }
-            }
-
-            for prefix in &to_be_removed {
-                subnets.remove(&prefix);
-            }
-        }
+        self.trie.simplify();
     }
 
     /// Returns a new `IpRange` which contains all subnets
@@ -233,102 +211,68 @@ impl IpRange {
     ///
     /// Returns None if no subnet in `self` includes `subnet`.
     pub fn super_subnet(&self, subnet: Subnet) -> Option<Subnet> {
-        for (larger_size, larger) in self.subnets[0..(subnet.prefix_size + 1)].iter().enumerate() {
-            if let Some(&larger_prefix) = larger
-                .range((Bound::Unbounded, Bound::Included(subnet.prefix)))
-                .next_back()
-            {
-                let larger_subnet = Subnet {
-                    prefix: larger_prefix,
-                    prefix_size: larger_size,
-                };
-                if subnet.prefix & larger_subnet.mask() == larger_prefix {
-                    return Some(larger_subnet);
-                }
-            }
-        }
-        None
-    }
-
-    // If `subnet` is not a single IP subnet, split it into two.
-    fn split_subnet(&mut self, subnet: Subnet) {
-        assert!(subnet.prefix_size < 32);
-
-        self.remove_subnet(subnet);
-        self.add_subnet(subnet.prefix, subnet.prefix_size + 1);
-        self.add_subnet(
-            (subnet.prefix.0 | (0xffffffffu32 >> (subnet.prefix_size + 1)) + 1).into(),
-            subnet.prefix_size + 1,
-        )
-    }
-
-    // Remove all subnets inside `subnet`.
-    fn remove_inside(&mut self, subnet: Subnet) {
-        for smaller in self.subnets[subnet.prefix_size..33].iter_mut() {
-            let to_be_removed: Vec<CompactIpv4> = smaller
-                .range((
-                    Bound::Included(subnet.prefix),
-                    Bound::Included(subnet.end()),
-                ))
-                .map(|&prefix| prefix)
-                .collect();
-            for prefix in to_be_removed {
-                smaller.remove(&prefix);
-            }
-        }
-    }
-
-    // An util method to add a subnet.
-    fn add_subnet(&mut self, prefix: CompactIpv4, prefix_size: usize) {
-        self.subnets[prefix_size].insert(prefix);
-    }
-
-    // Remove `subnet` from `self`.
-    fn remove_subnet(&mut self, subnet: Subnet) {
-        self.subnets[subnet.prefix_size].remove(&subnet.prefix);
+        self.trie.search(subnet)
     }
 }
 
 impl<'a> IntoIterator for &'a IpRange {
     type Item = Subnet;
-    type IntoIter = IpRangeIter<'a>;
+    type IntoIter = IpRangeIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        IpRangeIter {
-            iter: Box::new(self.subnets.iter().enumerate().flat_map(
-                |(prefix_size, s)| {
-                    s.iter().map(move |&prefix| {
-                        Subnet {
-                            prefix,
-                            prefix_size,
-                        }
-                    })
-                },
-            )),
+        let mut queue = VecDeque::new();
+        if let Some(root) = self.trie.root.as_ref() {
+            queue.push_back(IpRangeIterElem {
+                node: root.clone(),
+                prefix: 0,
+                prefix_size: 0,
+            });
         }
+        IpRangeIter { queue }
     }
 }
 
 /// An iterator over the subnets in an [`IpRange`].
 ///
 /// [`IpRange`]: struct.IpRange.html
-pub struct IpRangeIter<'a> {
-    iter: Box<Iterator<Item = Subnet> + 'a>,
+pub struct IpRangeIter {
+    queue: VecDeque<IpRangeIterElem>,
 }
 
-impl<'a> Iterator for IpRangeIter<'a> {
+struct IpRangeIterElem {
+    node: Rc<RefCell<IpTrieNode>>,
+    prefix: u32,
+    prefix_size: usize,
+}
+
+impl<'a> Iterator for IpRangeIter {
     type Item = Subnet;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
-    }
-
-    fn count(self) -> usize {
-        self.iter.count()
+        while let Some(elem) = self.queue.pop_front() {
+            if elem.node.borrow().is_leaf() {
+                let subnet = Some(Subnet {
+                    prefix: CompactIpv4(elem.prefix),
+                    prefix_size: elem.prefix_size,
+                });
+                return subnet;
+            }
+            if let Some(one) = elem.node.borrow().one.as_ref() {
+                self.queue.push_back(IpRangeIterElem {
+                    node: one.clone(),
+                    prefix: elem.prefix | (1 << (31 - elem.prefix_size)),
+                    prefix_size: elem.prefix_size + 1,
+                })
+            }
+            if let Some(zero) = elem.node.borrow().zero.as_ref() {
+                self.queue.push_back(IpRangeIterElem {
+                    node: zero.clone(),
+                    prefix: elem.prefix,
+                    prefix_size: elem.prefix_size + 1,
+                })
+            }
+        }
+        None
     }
 }
 
@@ -483,6 +427,15 @@ pub struct Subnet {
 }
 
 impl Subnet {
+    pub fn new(prefix: CompactIpv4, prefix_size: usize) -> Subnet {
+        let mut subnet = Subnet {
+            prefix,
+            prefix_size,
+        };
+        subnet.prefix &= subnet.mask();
+        subnet
+    }
+
     /// Tests if `self` contains the IP `addr`.
     pub fn contains<T: Into<CompactIpv4>>(&self, addr: T) -> bool {
         (addr.into() & self.mask()) == self.prefix
@@ -596,6 +549,173 @@ impl Error for ParseSubnetError {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IpTrie {
+    root: Option<Rc<RefCell<IpTrieNode>>>,
+}
+
+impl IpTrie {
+    fn new() -> IpTrie {
+        IpTrie { root: None }
+    }
+
+    fn insert(&mut self, subnet: Subnet) {
+        if self.root.is_none() {
+            self.root = Some(Rc::new(RefCell::new(IpTrieNode::new())))
+        }
+
+        let mut node = self.root.clone().unwrap();
+        let mut tmp_prefix = subnet.prefix.0;
+        for _ in 0..subnet.prefix_size {
+            let (prefix, overflow) = tmp_prefix.overflowing_mul(2);
+            tmp_prefix = prefix;
+
+            let child = if overflow {
+                node.borrow().one.clone()
+            } else {
+                node.borrow().zero.clone()
+            };
+            match child {
+                Some(child) => {
+                    if child.borrow().is_leaf() {
+                        return;
+                    }
+                    node = child;
+                }
+                None => {
+                    let new_node = Rc::new(RefCell::new(IpTrieNode::new()));
+                    if overflow {
+                        (*node.borrow_mut()).one = Some(new_node.clone());
+                    } else {
+                        (*node.borrow_mut()).zero = Some(new_node.clone());
+                    }
+                    node = new_node;
+                }
+            }
+        }
+        (*node.borrow_mut()).one = None;
+        (*node.borrow_mut()).zero = None;
+    }
+
+    fn search(&self, subnet: Subnet) -> Option<Subnet> {
+        if self.root.is_none() {
+            return None;
+        }
+        let mut node = self.root.clone().unwrap();
+        let mut tmp_prefix = subnet.prefix.0;
+        for i in 0..subnet.prefix_size {
+            if node.borrow().is_leaf() {
+                return Some(Subnet::new(subnet.prefix, i));
+            }
+
+            let (prefix, overflow) = tmp_prefix.overflowing_mul(2);
+            tmp_prefix = prefix;
+
+            let child = if overflow {
+                node.borrow().one.clone()
+            } else {
+                node.borrow().zero.clone()
+            };
+
+            match child {
+                Some(child) => node = child,
+                None => return None,
+            }
+        }
+        if node.borrow().is_leaf() {
+            Some(subnet)
+        } else {
+            None
+        }
+    }
+
+    fn remove(&mut self, subnet: Subnet) {
+        if self.root.is_none() {
+            return;
+        }
+
+        let node = self.root.clone().unwrap();
+        node.borrow_mut()
+            .remove(subnet.prefix.0, subnet.prefix_size);
+    }
+
+    fn simplify(&mut self) {
+        if let Some(root) = self.root.as_ref() {
+            root.borrow_mut().simplify();
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IpTrieNode {
+    zero: Option<Rc<RefCell<IpTrieNode>>>,
+    one: Option<Rc<RefCell<IpTrieNode>>>,
+}
+
+impl IpTrieNode {
+    fn new() -> IpTrieNode {
+        IpTrieNode {
+            zero: None,
+            one: None,
+        }
+    }
+
+    fn is_leaf(&self) -> bool {
+        self.zero.is_none() && self.one.is_none()
+    }
+
+    fn simplify(&mut self) {
+        let mut leaf_count = 0;
+        if let Some(zero) = self.zero.as_ref() {
+            zero.borrow_mut().simplify();
+            if zero.borrow().is_leaf() {
+                leaf_count += 1;
+            }
+        }
+        if let Some(one) = self.one.as_ref() {
+            one.borrow_mut().simplify();
+            if one.borrow().is_leaf() {
+                leaf_count += 1;
+            }
+        }
+        if leaf_count == 2 {
+            self.one = None;
+            self.zero = None;
+        }
+    }
+
+    fn remove(&mut self, prefix: u32, prefix_size: usize) {
+        let (prefix, overflow) = prefix.overflowing_mul(2);
+        if self.is_leaf() {
+            self.one = Some(Rc::new(RefCell::new(IpTrieNode::new())));
+            self.zero = Some(Rc::new(RefCell::new(IpTrieNode::new())));
+        }
+        if prefix_size == 1 {
+            if overflow {
+                self.one = None;
+            } else {
+                self.zero = None;
+            }
+            return;
+        }
+        if overflow {
+            if let Some(child) = self.one.clone() {
+                child.borrow_mut().remove(prefix, prefix_size - 1);
+                if child.borrow().is_leaf() {
+                    self.one = None;
+                }
+            }
+        } else {
+            if let Some(child) = self.zero.clone() {
+                child.borrow_mut().remove(prefix, prefix_size - 1);
+                if child.borrow().is_leaf() {
+                    self.zero = None;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,14 +768,10 @@ mod tests {
 
     impl IpRange {
         fn get_subnet(&self, prefix_size: usize, prefix: &str) -> Option<Subnet> {
-            self.subnets[prefix_size]
-                .get(&prefix.parse::<Ipv4Addr>().unwrap().into())
-                .map(|&prefix| {
-                    Subnet {
-                        prefix,
-                        prefix_size,
-                    }
-                })
+            self.trie.search(Subnet {
+                prefix: prefix.parse::<Ipv4Addr>().unwrap().into(),
+                prefix_size,
+            })
         }
     }
 
@@ -689,6 +805,7 @@ mod tests {
         assert_eq!(Some(subnet4), ip_range.get_subnet(32, "254.254.254.254"));
     }
 
+
     #[test]
     fn simplify() {
         let mut ip_range = IpRange::new();
@@ -708,6 +825,7 @@ mod tests {
             ip_range.get_subnet(19, "192.168.0.0")
         );
     }
+
 
     #[test]
     fn add_multiple_subnets_joint1() {
@@ -839,6 +957,7 @@ mod tests {
             ip_range.get_subnet(24, "192.168.3.0")
         );
     }
+
 
     impl IpRange {
         fn contains_ip(&self, ip: &str) -> bool {
