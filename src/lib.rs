@@ -121,7 +121,7 @@ impl IpRange {
     ///
     /// [`simplify`]: struct.IpRange.html#method.simplify
     pub fn add(&mut self, network: Ipv4Net) -> &mut IpRange {
-        self.trie.insert(network.trunc());
+        self.trie.insert(network);
         self
     }
 
@@ -143,7 +143,7 @@ impl IpRange {
     /// // Now, ip_range has only one network: "192.168.1.0/24".
     /// ```
     pub fn remove(&mut self, network: Ipv4Net) -> &mut IpRange {
-        self.trie.remove(network.trunc());
+        self.trie.remove(network);
         self
     }
 
@@ -327,7 +327,7 @@ impl IpTrie {
 
         // We care only the most significant bit of it.
         // It is shifted left by 1 bit in each iteration of the loop.
-        let mut prefix: u32 = network.addr().into();
+        let mut prefix: u32 = network.network().into();
 
         for _ in 0..network.prefix_len() {
             let i = (prefix >> 31) as usize;
@@ -358,7 +358,7 @@ impl IpTrie {
             return None;
         }
         let mut node = self.root.clone().unwrap();
-        let mut prefix: u32 = network.addr().into();
+        let mut prefix: u32 = network.network().into();
         for i in 0..network.prefix_len() {
             if node.borrow().is_leaf() {
                 return Ipv4Net::new(network.addr(), i).ok().map(|n| n.trunc());
@@ -375,7 +375,7 @@ impl IpTrie {
         }
 
         if node.borrow().is_leaf() {
-            Some(network)
+            Some(network.trunc())
         } else {
             None
         }
@@ -398,7 +398,7 @@ impl IpTrie {
     fn remove(&mut self, network: Ipv4Net) {
         if let Some(root) = self.root.as_ref() {
             root.borrow_mut()
-                .remove(network.addr().into(), network.prefix_len());
+                .remove(network.network().into(), network.prefix_len());
         }
     }
 
