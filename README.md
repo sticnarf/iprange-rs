@@ -29,8 +29,8 @@ fn main() {
         .add("172.16.0.0/16".parse().unwrap())
         .add("192.168.1.0/24".parse().unwrap());
 
-    assert!(ip_range.contains("172.16.32.1".parse::<Ipv4Addr>().unwrap()));
-    assert!(ip_range.contains("192.168.1.1".parse::<Ipv4Addr>().unwrap()));
+    assert!(ip_range.includes("172.16.32.1".parse::<Ipv4Addr>().unwrap()));
+    assert!(ip_range.includes("192.168.1.1".parse::<Ipv4Addr>().unwrap()));
 }
 ```
 

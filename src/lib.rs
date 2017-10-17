@@ -24,8 +24,8 @@
 //!         .add("172.16.0.0/16".parse().unwrap())
 //!         .add("192.168.1.0/24".parse().unwrap());
 //!
-//!     assert!(ip_range.contains("172.16.32.1".parse::<Ipv4Addr>().unwrap()));
-//!     assert!(ip_range.contains("192.168.1.1".parse::<Ipv4Addr>().unwrap()));
+//!     assert!(ip_range.includes("172.16.32.1".parse::<Ipv4Addr>().unwrap()));
+//!     assert!(ip_range.includes("192.168.1.1".parse::<Ipv4Addr>().unwrap()));
 //! }
 //! ```
 //!
@@ -80,7 +80,6 @@ use ipnet::Ipv4Net;
 ///
 /// [`add`]: struct.IpRange.html#method.add
 /// [`remove`]: struct.IpRange.html#method.remove
-/// [`contains`]: struct.IpRange.html#method.contains
 /// [`includes`]: struct.IpRange.html#method.includes
 /// [`merge`]: struct.IpRange.html#method.merge
 /// [`intersect`]: struct.IpRange.html#method.intersect
@@ -198,14 +197,12 @@ impl IpRange {
         new
     }
 
-    /// Tests if `ip` is in `self`.
-    pub fn contains<T: Into<Ipv4Addr>>(&self, ip: T) -> bool {
-        self.find(ip.into()).is_some()
-    }
-
-    /// Tests if `self` includes `network`.
-    pub fn includes(&self, network: Ipv4Net) -> bool {
-        self.supernet(network).is_some()
+    /// Tests if `self` includes `content`.
+    ///
+    /// `content` is anything that can be converted into `Ipv4Net`.
+    /// See `ToNetwork` for detail.
+    pub fn includes<T: ToNetwork>(&self, content: T) -> bool {
+        self.supernet(content.to_network()).is_some()
     }
 
     /// Returns the network in `self` that contains `ip`.
@@ -237,6 +234,39 @@ impl<'a> IntoIterator for &'a IpRange {
             });
         }
         IpRangeIter { queue }
+    }
+}
+
+/// Anything that can be converted to `Ipv4Net`.
+///
+/// Due to limitation of Rust's type system,
+/// this trait is onyl implmentaed for some
+/// concrete types.
+pub trait ToNetwork {
+    fn to_network(self) -> Ipv4Net;
+}
+
+impl ToNetwork for Ipv4Net {
+    fn to_network(self) -> Ipv4Net {
+        self
+    }
+}
+
+impl ToNetwork for Ipv4Addr {
+    fn to_network(self) -> Ipv4Net {
+        Ipv4Net::new(self, 32).unwrap()
+    }
+}
+
+impl ToNetwork for u32 {
+    fn to_network(self) -> Ipv4Net {
+        Ipv4Net::new(self.into(), 32).unwrap()
+    }
+}
+
+impl ToNetwork for [u8; 4] {
+    fn to_network(self) -> Ipv4Net {
+        Ipv4Net::new(self.into(), 32).unwrap()
     }
 }
 
@@ -283,7 +313,7 @@ impl<'a> Iterator for IpRangeIter {
 impl FromIterator<Ipv4Net> for IpRange {
     fn from_iter<T>(iter: T) -> Self
         where
-            T: IntoIterator<Item = Ipv4Net>,
+            T: IntoIterator<Item=Ipv4Net>,
     {
         let mut ip_range = IpRange::new();
         for network in iter {
@@ -297,7 +327,7 @@ impl FromIterator<Ipv4Net> for IpRange {
 impl<'a> FromIterator<&'a Ipv4Net> for IpRange {
     fn from_iter<T>(iter: T) -> Self
         where
-            T: IntoIterator<Item = &'a Ipv4Net>,
+            T: IntoIterator<Item=&'a Ipv4Net>,
     {
         let mut ip_range = IpRange::new();
         for network in iter {
@@ -709,7 +739,7 @@ mod tests {
 
     impl IpRange {
         fn contains_ip(&self, ip: &str) -> bool {
-            self.contains(ip.parse::<Ipv4Addr>().unwrap())
+            self.includes(ip.parse::<Ipv4Addr>().unwrap())
         }
 
         fn find_network_by_ip(&self, ip: &str) -> Option<Ipv4Net> {
@@ -717,7 +747,7 @@ mod tests {
         }
 
         fn includes_network(&self, network: &str) -> bool {
-            self.includes(network.parse().unwrap())
+            self.includes(network.parse::<Ipv4Net>().unwrap())
         }
 
         fn super_network_by_network(&self, network: &str) -> Option<Ipv4Net> {
