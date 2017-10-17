@@ -49,7 +49,15 @@ use std::iter::FromIterator;
 use std::collections::VecDeque;
 use byteorder::{BigEndian, ByteOrder};
 
-/// A set of subnets that supports various operations.
+/// A set of subnets that supports various operations:
+///
+/// * [`add`]
+/// * [`remove`]
+/// * [`contains`]
+/// * [`includes`]
+/// * [`merge`]
+/// * [`intersect`]
+/// * [`exclude`]
 ///
 /// `IntoIter` is implemented for `&IpRange`. So, you can use `for`
 /// to iterate over the subnets in an `IpRange`:
@@ -66,10 +74,17 @@ use byteorder::{BigEndian, ByteOrder};
 ///     println!("{:?}", subnet);
 /// }
 /// ```
+///
+/// [`add`]: struct.IpRange.html#method.add
+/// [`remove`]: struct.IpRange.html#method.remove
+/// [`contains`]: struct.IpRange.html#method.contains
+/// [`includes`]: struct.IpRange.html#method.includes
+/// [`merge`]: struct.IpRange.html#method.merge
+/// [`intersect`]: struct.IpRange.html#method.intersect
+/// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpRange {
-    // The index of the Vec is the prefix size of the subnets
-    // which the corresponding BTreeMap contains
+    // IpRange uses a radix trie to store IP subnets
     trie: IpTrie,
 }
 
@@ -234,6 +249,8 @@ impl<'a> IntoIterator for &'a IpRange {
 
 /// An iterator over the subnets in an [`IpRange`].
 ///
+/// BFS (Breadth-First-Search) is used for traversing the inner Radix Trie.
+///
 /// [`IpRange`]: struct.IpRange.html
 pub struct IpRangeIter {
     queue: VecDeque<IpRangeIterElem>,
@@ -250,6 +267,8 @@ impl<'a> Iterator for IpRangeIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(elem) = self.queue.pop_front() {
+            // Get the front element of the queue.
+            // If it is a leaf, it represents a subnet
             if elem.node.borrow().is_leaf() {
                 let subnet = Some(Subnet {
                     prefix: CompactIpv4(elem.prefix),
@@ -257,20 +276,16 @@ impl<'a> Iterator for IpRangeIter {
                 });
                 return subnet;
             }
-            if let Some(one) = elem.node.borrow().one.as_ref() {
-                self.queue.push_back(IpRangeIterElem {
-                    node: one.clone(),
-                    prefix: elem.prefix | (1 << (31 - elem.prefix_size)),
-                    prefix_size: elem.prefix_size + 1,
-                })
-            }
-            if let Some(zero) = elem.node.borrow().zero.as_ref() {
-                self.queue.push_back(IpRangeIterElem {
-                    node: zero.clone(),
-                    prefix: elem.prefix,
-                    prefix_size: elem.prefix_size + 1,
-                })
-            }
+            [0, 1].iter().for_each(|&i| {
+                if let Some(child) = elem.node.borrow().children[i as usize].as_ref() {
+                    // Push the child nodes into the queue
+                    self.queue.push_back(IpRangeIterElem {
+                        node: child.clone(),
+                        prefix: elem.prefix | (i << (31 - elem.prefix_size)),
+                        prefix_size: elem.prefix_size + 1,
+                    })
+                }
+            });
         }
         None
     }
@@ -432,6 +447,7 @@ impl Subnet {
             prefix,
             prefix_size,
         };
+        // Fix subnet
         subnet.prefix &= subnet.mask();
         subnet
     }
@@ -564,37 +580,34 @@ impl IpTrie {
             self.root = Some(Rc::new(RefCell::new(IpTrieNode::new())))
         }
 
-        let mut node = self.root.clone().unwrap();
-        let mut tmp_prefix = subnet.prefix.0;
-        for _ in 0..subnet.prefix_size {
-            let (prefix, overflow) = tmp_prefix.overflowing_mul(2);
-            tmp_prefix = prefix;
+        let mut node = self.root.clone().unwrap(); // The current node
 
-            let child = if overflow {
-                node.borrow().one.clone()
-            } else {
-                node.borrow().zero.clone()
-            };
+        // We care only the most significant bit of it.
+        // It is shifted left by 1 bit in each iteration of the loop.
+        let mut prefix = subnet.prefix.0;
+
+        for _ in 0..subnet.prefix_size {
+            let i = (prefix >> 31) as usize;
+            prefix <<= 1;
+
+            let child = node.borrow().children[i].clone();
             match child {
                 Some(child) => {
                     if child.borrow().is_leaf() {
+                        // This means the subnet to be inserted
+                        // is already in the trie.
                         return;
                     }
                     node = child;
                 }
                 None => {
                     let new_node = Rc::new(RefCell::new(IpTrieNode::new()));
-                    if overflow {
-                        (*node.borrow_mut()).one = Some(new_node.clone());
-                    } else {
-                        (*node.borrow_mut()).zero = Some(new_node.clone());
-                    }
+                    (*node.borrow_mut()).children[i] = Some(new_node.clone());
                     node = new_node;
                 }
             }
         }
-        (*node.borrow_mut()).one = None;
-        (*node.borrow_mut()).zero = None;
+        (*node.borrow_mut()).children = [None, None];
     }
 
     fn search(&self, subnet: Subnet) -> Option<Subnet> {
@@ -602,41 +615,44 @@ impl IpTrie {
             return None;
         }
         let mut node = self.root.clone().unwrap();
-        let mut tmp_prefix = subnet.prefix.0;
+        let mut prefix = subnet.prefix.0;
         for i in 0..subnet.prefix_size {
             if node.borrow().is_leaf() {
                 return Some(Subnet::new(subnet.prefix, i));
             }
 
-            let (prefix, overflow) = tmp_prefix.overflowing_mul(2);
-            tmp_prefix = prefix;
+            let i = (prefix >> 31) as usize;
+            prefix <<= 1;
 
-            let child = if overflow {
-                node.borrow().one.clone()
-            } else {
-                node.borrow().zero.clone()
-            };
-
+            let child = node.borrow().children[i].clone();
             match child {
                 Some(child) => node = child,
                 None => return None,
             }
         }
+
         if node.borrow().is_leaf() {
             Some(subnet)
         } else {
             None
         }
+
+        // The commented code below is more clear. However, this uses a
+        // commented recursive method `search` in IpTrieNode, so the performance
+        // is relatively poorer that the implementation above.
+
+        // self.root.as_ref().and_then(|root| {
+        //     root.borrow()
+        //         .search(subnet.prefix.0, subnet.prefix_size)
+        //         .map(|prefix_size| Subnet::new(subnet.prefix, prefix_size))
+        // })
     }
 
     fn remove(&mut self, subnet: Subnet) {
-        if self.root.is_none() {
-            return;
+        if let Some(root) = self.root.as_ref() {
+            root.borrow_mut()
+                .remove(subnet.prefix.0, subnet.prefix_size);
         }
-
-        let node = self.root.clone().unwrap();
-        node.borrow_mut()
-            .remove(subnet.prefix.0, subnet.prefix_size);
     }
 
     fn simplify(&mut self) {
@@ -648,69 +664,92 @@ impl IpTrie {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct IpTrieNode {
-    zero: Option<Rc<RefCell<IpTrieNode>>>,
-    one: Option<Rc<RefCell<IpTrieNode>>>,
+    children: [Option<Rc<RefCell<IpTrieNode>>>; 2],
 }
 
 impl IpTrieNode {
     fn new() -> IpTrieNode {
         IpTrieNode {
-            zero: None,
-            one: None,
+            children: [None, None],
         }
     }
 
+    // If both the zero child and the one child of a node are None,
+    // it is a leaf node, and it represents a subnet whose
+    // prefix is the path from root to it.
     fn is_leaf(&self) -> bool {
-        self.zero.is_none() && self.one.is_none()
+        self.children[0].is_none() && self.children[1].is_none()
     }
 
+    // If the two children of a node are all leaf node,
+    // they can be merged into a new leaf node.
     fn simplify(&mut self) {
-        let mut leaf_count = 0;
-        if let Some(zero) = self.zero.as_ref() {
-            zero.borrow_mut().simplify();
-            if zero.borrow().is_leaf() {
-                leaf_count += 1;
-            }
-        }
-        if let Some(one) = self.one.as_ref() {
-            one.borrow_mut().simplify();
-            if one.borrow().is_leaf() {
-                leaf_count += 1;
-            }
-        }
+        let leaf_count: u32 = self.children
+            .iter()
+            .map(|child| {
+                child
+                    .as_ref()
+                    .map(|child| {
+                        child.borrow_mut().simplify();
+                        child.borrow().is_leaf() as u32
+                    })
+                    .unwrap_or_default()
+            })
+            .sum();
         if leaf_count == 2 {
-            self.one = None;
-            self.zero = None;
+            self.children = [None, None];
         }
     }
+
+    // fn search(&self, prefix: u32, prefix_size: usize) -> Option<usize> {
+    //     let i = (prefix >> 31) as usize;
+    //     let prefix = prefix << 1;
+
+    //     if self.is_leaf() {
+    //         Some(0)
+    //     } else if prefix_size <= 0 {
+    //         None
+    //     } else {
+    //         self.children[i].clone().and_then(|child| {
+    //             child
+    //                 .borrow_mut()
+    //                 .search(prefix, prefix_size - 1)
+    //                 .map(|x| x + 1)
+    //         })
+    //     }
+    // }
 
     fn remove(&mut self, prefix: u32, prefix_size: usize) {
-        let (prefix, overflow) = prefix.overflowing_mul(2);
+        let i = (prefix >> 31) as usize;
+        let prefix = prefix << 1;
+
+        // If the current node is a leaf node, and we have a subnet
+        // to remove, we must split it into two deeper nodes.
         if self.is_leaf() {
-            self.one = Some(Rc::new(RefCell::new(IpTrieNode::new())));
-            self.zero = Some(Rc::new(RefCell::new(IpTrieNode::new())));
+            self.children = [
+                Some(Rc::new(RefCell::new(IpTrieNode::new()))),
+                Some(Rc::new(RefCell::new(IpTrieNode::new()))),
+            ];
         }
+
+        // Remove the node that represents the subnet.
         if prefix_size == 1 {
-            if overflow {
-                self.one = None;
-            } else {
-                self.zero = None;
-            }
+            self.children[i] = None;
             return;
         }
-        if overflow {
-            if let Some(child) = self.one.clone() {
-                child.borrow_mut().remove(prefix, prefix_size - 1);
-                if child.borrow().is_leaf() {
-                    self.one = None;
-                }
-            }
-        } else {
-            if let Some(child) = self.zero.clone() {
-                child.borrow_mut().remove(prefix, prefix_size - 1);
-                if child.borrow().is_leaf() {
-                    self.zero = None;
-                }
+
+        if let Some(child) = self.children[i].clone() {
+            // Remove the deeper node recursively
+            child.borrow_mut().remove(prefix, prefix_size - 1);
+
+            // In general, a leaf node represents a complete
+            // subnet. However, the child node cannot be a complete
+            // subnet after removing a subnet from it.
+            // This occurring indicates the only child of the
+            // child node is removed, and now this child node
+            // should be marked None.
+            if child.borrow().is_leaf() {
+                self.children[i] = None;
             }
         }
     }
