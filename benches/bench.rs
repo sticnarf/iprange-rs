@@ -69,6 +69,6 @@ fn test_10000_ips_in_chnlists(b: &mut Bencher) {
         .flat_map(|l| l.parse::<Ipv4Net>())
         .collect::<IpRange>();
     b.iter(|| for &ip in &ip_list {
-        chnlists.contains(ip);
+        chnlists.includes(ip);
     });
 }

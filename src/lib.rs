@@ -312,8 +312,8 @@ impl<'a> Iterator for IpRangeIter {
 
 impl FromIterator<Ipv4Net> for IpRange {
     fn from_iter<T>(iter: T) -> Self
-        where
-            T: IntoIterator<Item=Ipv4Net>,
+    where
+        T: IntoIterator<Item = Ipv4Net>,
     {
         let mut ip_range = IpRange::new();
         for network in iter {
@@ -326,8 +326,8 @@ impl FromIterator<Ipv4Net> for IpRange {
 
 impl<'a> FromIterator<&'a Ipv4Net> for IpRange {
     fn from_iter<T>(iter: T) -> Self
-        where
-            T: IntoIterator<Item=&'a Ipv4Net>,
+    where
+        T: IntoIterator<Item = &'a Ipv4Net>,
     {
         let mut ip_range = IpRange::new();
         for network in iter {
