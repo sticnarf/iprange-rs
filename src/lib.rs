@@ -13,19 +13,20 @@
 //!
 //! ```
 //! extern crate iprange;
+//! extern crate ipnet;
 //!
 //! use std::net::Ipv4Addr;
 //! use iprange::IpRange;
+//! use ipnet::Ipv4Net;
 //!
 //! fn main() {
-//!     let mut ip_range = IpRange::new();
-//!     ip_range
-//!         .add("10.0.0.0/8".parse().unwrap())
-//!         .add("172.16.0.0/16".parse().unwrap())
-//!         .add("192.168.1.0/24".parse().unwrap());
+//!     let ip_range: IpRange<Ipv4Net> = ["10.0.0.0/8", "172.16.0.0/16", "192.168.1.0/24"]
+//!         .iter()
+//!         .map(|s| s.parse().unwrap())
+//!         .collect();
 //!
-//!     assert!(ip_range.includes("172.16.32.1".parse::<Ipv4Addr>().unwrap()));
-//!     assert!(ip_range.includes("192.168.1.1".parse::<Ipv4Addr>().unwrap()));
+//!     assert!(ip_range.contains(&"172.16.32.1".parse::<Ipv4Addr>().unwrap()));
+//!     assert!(ip_range.contains(&"192.168.1.1".parse::<Ipv4Addr>().unwrap()));
 //! }
 //! ```
 //!
@@ -44,13 +45,14 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::iter::FromIterator;
 use std::collections::VecDeque;
+use std::marker::{Sized, PhantomData};
 use ipnet::Ipv4Net;
 
 /// A set of networks that supports various operations:
 ///
 /// * [`add`]
 /// * [`remove`]
-/// * [`includes`]
+/// * [`contains`]
 /// * [`merge`]
 /// * [`intersect`]
 /// * [`exclude`]
@@ -66,9 +68,9 @@ use ipnet::Ipv4Net;
 /// use ipnet::Ipv4Net;
 ///
 /// fn main() {
-///     let ip_range: IpRange = ["172.16.0.0/16", "192.168.1.0/24"]
+///     let ip_range: IpRange<Ipv4Net> = ["172.16.0.0/16", "192.168.1.0/24"]
 ///         .iter()
-///         .map(|s| s.parse::<Ipv4Net>().unwrap())
+///         .map(|s| s.parse().unwrap())
 ///         .collect();
 ///
 ///     for network in &ip_range {
@@ -79,21 +81,27 @@ use ipnet::Ipv4Net;
 ///
 /// [`add`]: struct.IpRange.html#method.add
 /// [`remove`]: struct.IpRange.html#method.remove
-/// [`includes`]: struct.IpRange.html#method.includes
+/// [`contains`]: struct.IpRange.html#method.contains
 /// [`merge`]: struct.IpRange.html#method.merge
 /// [`intersect`]: struct.IpRange.html#method.intersect
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpRange {
+pub struct IpRange<R>
+    where R: IpNet + ToNetwork<R> + Clone
+{
     // IpRange uses a radix trie to store networks
-    trie: IpTrie,
+    trie: IpTrie<R>,
+    phantom_net: PhantomData<R>,
 }
 
-impl IpRange {
+impl<R> IpRange<R>
+    where R: IpNet + ToNetwork<R> + Clone
+{
     /// Creates an empty `IpRange`.
-    pub fn new() -> IpRange {
+    pub fn new() -> IpRange<R> {
         IpRange {
             trie: IpTrie::new(),
+            phantom_net: PhantomData,
         }
     }
 
@@ -106,19 +114,25 @@ impl IpRange {
     /// explicitly. For example:
     ///
     /// ```
+    /// extern crate iprange;
+    /// extern crate ipnet;
+    ///
     /// use iprange::IpRange;
+    /// use ipnet::Ipv4Net;
     ///
-    /// let mut ip_range = IpRange::new();
-    /// ip_range.add("192.168.0.0/24".parse().unwrap())
-    ///         .add("192.168.1.0/24".parse().unwrap());
-    /// assert_eq!(ip_range.into_iter().count(), 2);
+    /// fn main() {
+    ///     let mut ip_range: IpRange<Ipv4Net> = IpRange::new();
+    ///     ip_range.add("192.168.0.0/24".parse().unwrap())
+    ///            .add("192.168.1.0/24".parse().unwrap());
+    ///     assert_eq!(ip_range.into_iter().count(), 2);
     ///
-    /// ip_range.simplify();
-    /// assert_eq!(ip_range.into_iter().count(), 1);
+    ///     ip_range.simplify();
+    ///     assert_eq!(ip_range.into_iter().count(), 1);
+    /// }
     /// ```
     ///
     /// [`simplify`]: struct.IpRange.html#method.simplify
-    pub fn add(&mut self, network: Ipv4Net) -> &mut IpRange {
+    pub fn add(&mut self, network: R) -> &mut IpRange<R> {
         self.trie.insert(network);
         self
     }
@@ -133,14 +147,20 @@ impl IpRange {
     /// For example:
     ///
     /// ```
-    /// use iprange::IpRange;
+    /// extern crate iprange;
+    /// extern crate ipnet;
     ///
-    /// let mut ip_range = IpRange::new();
-    /// ip_range.add("192.168.0.0/23".parse().unwrap())
-    ///         .remove("192.168.0.0/24".parse().unwrap());
-    /// // Now, ip_range has only one network: "192.168.1.0/24".
+    /// use iprange::IpRange;
+    /// use ipnet::Ipv4Net;
+    ///
+    /// fn main() {
+    ///     let mut ip_range: IpRange<Ipv4Net> = IpRange::new();
+    ///     ip_range.add("192.168.0.0/23".parse().unwrap())
+    ///             .remove("192.168.0.0/24".parse().unwrap());
+    ///     // Now, ip_range has only one network: "192.168.1.0/24".
+    /// }
     /// ```
-    pub fn remove(&mut self, network: Ipv4Net) -> &mut IpRange {
+    pub fn remove(&mut self, network: R) -> &mut IpRange<R> {
         self.trie.remove(network);
         self
     }
@@ -148,19 +168,25 @@ impl IpRange {
     /// Simplify `self` by combining networks. For example:
     ///
     /// ```
-    /// use iprange::IpRange;
+    /// extern crate iprange;
+    /// extern crate ipnet;
     ///
-    /// let mut ip_range = IpRange::new();
-    /// ip_range
-    ///     .add("192.168.0.0/20".parse().unwrap())
-    ///     .add("192.168.16.0/22".parse().unwrap())
-    ///     .add("192.168.20.0/24".parse().unwrap())
-    ///     .add("192.168.21.0/24".parse().unwrap())
-    ///     .add("192.168.22.0/24".parse().unwrap())
-    ///     .add("192.168.23.0/24".parse().unwrap())
-    ///     .add("192.168.24.0/21".parse().unwrap())
-    ///     .simplify();
-    /// // Now, ip_range has only one network: "192.168.0.0/19".
+    /// use iprange::IpRange;
+    /// use ipnet::Ipv4Net;
+    ///
+    /// fn main() {
+    ///     let mut ip_range: IpRange<Ipv4Net> = IpRange::new();
+    ///     ip_range
+    ///         .add("192.168.0.0/20".parse().unwrap())
+    ///         .add("192.168.16.0/22".parse().unwrap())
+    ///         .add("192.168.20.0/24".parse().unwrap())
+    ///         .add("192.168.21.0/24".parse().unwrap())
+    ///         .add("192.168.22.0/24".parse().unwrap())
+    ///         .add("192.168.23.0/24".parse().unwrap())
+    ///         .add("192.168.24.0/21".parse().unwrap())
+    ///         .simplify();
+    ///     // Now, ip_range has only one network: "192.168.0.0/19".
+    /// }
     /// ```
     pub fn simplify(&mut self) {
         self.trie.simplify();
@@ -170,7 +196,7 @@ impl IpRange {
     /// that is either in `self` or in `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn merge(&self, other: &IpRange) -> IpRange {
+    pub fn merge(&self, other: &IpRange<R>) -> IpRange<R> {
         self.into_iter().chain(other.into_iter()).collect()
     }
 
@@ -178,9 +204,9 @@ impl IpRange {
     /// that is in both `self` and `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn intersect(&self, other: &IpRange) -> IpRange {
-        let range1 = self.into_iter().filter(|&network| other.includes(network));
-        let range2 = other.into_iter().filter(|&network| self.includes(network));
+    pub fn intersect(&self, other: &IpRange<R>) -> IpRange<R> {
+        let range1 = self.into_iter().filter(|network| other.contains(network));
+        let range2 = other.into_iter().filter(|network| self.contains(network));
         range1.chain(range2).collect()
     }
 
@@ -188,49 +214,42 @@ impl IpRange {
     /// that is in `self` while not in `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn exclude(&self, other: &IpRange) -> IpRange {
-        let mut new = self.clone();
+    pub fn exclude(&self, other: &IpRange<R>) -> IpRange<R> {
+        let mut new = (*self).clone();
         for network in other {
             new.remove(network);
         }
         new
     }
 
-    /// Tests if `self` includes `content`.
+    /// Tests if `self` contains `network`.
     ///
-    /// `content` is anything that can be converted into `Ipv4Net`.
-    /// See `ToNetwork` for detail.
-    pub fn includes<T: ToNetwork>(&self, content: T) -> bool {
-        self.supernet(content.to_network()).is_some()
-    }
-
-    /// Returns the network in `self` that contains `ip`.
-    ///
-    /// Returns None if no network in `self` contains `ip`.
-    pub fn find<T: Into<Ipv4Addr>>(&self, ip: T) -> Option<Ipv4Net> {
-        self.supernet(Ipv4Net::new(ip.into(), 32).unwrap())
+    /// `network` is anything that can be converted into `R`.
+    /// See `ToNetwork<R>` for detail.
+    pub fn contains<T: ToNetwork<R>>(&self, network: &T) -> bool {
+        self.supernet(&network.to_network()).is_some()
     }
 
     /// Returns the network in `self` which is the supernetwork of `network`.
     ///
-    /// Returns None if no network in `self` includes `network`.
-    pub fn supernet(&self, network: Ipv4Net) -> Option<Ipv4Net> {
-        self.trie.search(network.trunc())
+    /// Returns None if no network in `self` contains `network`.
+    pub fn supernet<T: ToNetwork<R>>(&self, network: &T) -> Option<R> {
+        self.trie.search(network.to_network())
     }
 }
 
-impl<'a> IntoIterator for &'a IpRange {
-    type Item = Ipv4Net;
-    type IntoIter = IpRangeIter;
+const HIGHEST_ONE: u32 = 1 << 31;
+
+impl<'a, R> IntoIterator for &'a IpRange<R>
+    where R: IpNet + ToNetwork<R> + Clone
+{
+    type Item = R;
+    type IntoIter = IpRangeIter<R>;
 
     fn into_iter(self) -> Self::IntoIter {
         let mut queue = VecDeque::new();
         if let Some(root) = self.trie.root.as_ref() {
-            queue.push_back(IpRangeIterElem {
-                node: root.clone(),
-                prefix: 0,
-                prefix_size: 0,
-            });
+            queue.push_back(R::S::init(root.clone()));
         }
         IpRangeIter { queue }
     }
@@ -241,31 +260,37 @@ impl<'a> IntoIterator for &'a IpRange {
 /// Due to limitation of Rust's type system,
 /// this trait is only implemented for some
 /// concrete types.
-pub trait ToNetwork {
-    fn to_network(self) -> Ipv4Net;
+pub trait ToNetwork<R: IpNet> {
+    fn to_network(&self) -> R;
 }
 
-impl ToNetwork for Ipv4Net {
-    fn to_network(self) -> Ipv4Net {
-        self
+impl ToNetwork<Ipv4Net> for Ipv4Net {
+    fn to_network(&self) -> Ipv4Net {
+        self.trunc()
     }
 }
 
-impl ToNetwork for Ipv4Addr {
-    fn to_network(self) -> Ipv4Net {
-        Ipv4Net::new(self, 32).unwrap()
+impl<'a> ToNetwork<Ipv4Net> for &'a Ipv4Net {
+    fn to_network(&self) -> Ipv4Net {
+        self.trunc()
     }
 }
 
-impl ToNetwork for u32 {
-    fn to_network(self) -> Ipv4Net {
-        Ipv4Net::new(self.into(), 32).unwrap()
+impl ToNetwork<Ipv4Net> for Ipv4Addr {
+    fn to_network(&self) -> Ipv4Net {
+        Ipv4Net::new(*self, 32).unwrap()
     }
 }
 
-impl ToNetwork for [u8; 4] {
-    fn to_network(self) -> Ipv4Net {
-        Ipv4Net::new(self.into(), 32).unwrap()
+impl ToNetwork<Ipv4Net> for u32 {
+    fn to_network(&self) -> Ipv4Net {
+        Ipv4Net::new((*self).into(), 32).unwrap()
+    }
+}
+
+impl ToNetwork<Ipv4Net> for [u8; 4] {
+    fn to_network(&self) -> Ipv4Net {
+        Ipv4Net::new((*self).into(), 32).unwrap()
     }
 }
 
@@ -274,34 +299,75 @@ impl ToNetwork for [u8; 4] {
 /// BFS (Breadth-First-Search) is used for traversing the inner Radix Trie.
 ///
 /// [`IpRange`]: struct.IpRange.html
-pub struct IpRangeIter {
-    queue: VecDeque<IpRangeIterElem>,
+pub struct IpRangeIter<R>
+    where R: IpNet
+{
+    queue: VecDeque<R::S>,
 }
 
-struct IpRangeIterElem {
+pub trait TraverseState<R>
+    where R: IpNet
+{
+    fn node(&self) -> Rc<RefCell<IpTrieNode>>;
+
+    fn init(root: Rc<RefCell<IpTrieNode>>) -> Self;
+
+    fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self;
+
+    fn build(&self) -> R;
+}
+
+pub struct Ipv4TraverseState
+{
     node: Rc<RefCell<IpTrieNode>>,
     prefix: u32,
-    prefix_size: u8,
+    prefix_len: u8
 }
 
-impl<'a> Iterator for IpRangeIter {
-    type Item = Ipv4Net;
+impl TraverseState<Ipv4Net> for Ipv4TraverseState {
+    fn node(&self) -> Rc<RefCell<IpTrieNode>> {
+        self.node.clone()
+    }
+
+    fn init(root: Rc<RefCell<IpTrieNode>>) -> Self {
+        Ipv4TraverseState {
+            node: root,
+            prefix: 0,
+            prefix_len: 0
+        }
+    }
+
+    fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self {
+        let mask = if current_bit { HIGHEST_ONE >> self.prefix_len } else { 0 };
+        Ipv4TraverseState {
+            node: next_node,
+            prefix: self.prefix | mask,
+            prefix_len: self.prefix_len + 1
+        }
+    }
+
+    fn build(&self) -> Ipv4Net {
+        Ipv4Net::new(self.prefix.into(), self.prefix_len).unwrap()
+    }
+}
+
+impl<R> Iterator for IpRangeIter<R>
+    where R: IpNet
+{
+    type Item = R;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(elem) = self.queue.pop_front() {
             // Get the front element of the queue.
             // If it is a leaf, it represents a network
-            if elem.node.borrow().is_leaf() {
-                return Ipv4Net::new(elem.prefix.into(), elem.prefix_size).ok();
+            let node = elem.node();
+            if node.borrow().is_leaf() {
+                return Some(elem.build());
             }
             [0, 1].iter().for_each(|&i| {
-                if let Some(child) = elem.node.borrow().children[i as usize].as_ref() {
+                if let Some(child) = node.borrow().children[i as usize].as_ref() {
                     // Push the child nodes into the queue
-                    self.queue.push_back(IpRangeIterElem {
-                        node: child.clone(),
-                        prefix: elem.prefix | (i << (31 - elem.prefix_size)),
-                        prefix_size: elem.prefix_size + 1,
-                    })
+                    self.queue.push_back(elem.transit(child.clone(), i != 0));
                 }
             });
         }
@@ -309,10 +375,11 @@ impl<'a> Iterator for IpRangeIter {
     }
 }
 
-impl FromIterator<Ipv4Net> for IpRange {
+impl<R> FromIterator<R> for IpRange<R>
+    where R: IpNet + ToNetwork<R> + Clone
+{
     fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = Ipv4Net>,
+        where T: IntoIterator<Item=R>,
     {
         let mut ip_range = IpRange::new();
         for network in iter {
@@ -323,45 +390,64 @@ impl FromIterator<Ipv4Net> for IpRange {
     }
 }
 
-impl<'a> FromIterator<&'a Ipv4Net> for IpRange {
-    fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = &'a Ipv4Net>,
-    {
-        let mut ip_range = IpRange::new();
-        for network in iter {
-            ip_range.add(*network);
-        }
-        ip_range.simplify();
-        ip_range
+pub trait IpNet
+    where Self: Sized
+{
+    type S: TraverseState<Self>;
+
+    fn prefix_bits(&self) -> Box<Iterator<Item=bool>>;
+
+    fn prefix_len(&self) -> u8;
+
+    fn with_new_prefix(&self, len: u8) -> Self;
+}
+
+impl IpNet for Ipv4Net {
+    type S = Ipv4TraverseState;
+
+    fn prefix_bits(&self) -> Box<Iterator<Item=bool>> {
+        let network: u32 = self.network().into();
+        let iter = (0..self.prefix_len()).map(move |i| network & (HIGHEST_ONE >> i) != 0);
+        Box::new(iter)
+    }
+
+    fn prefix_len(&self) -> u8 {
+        self.prefix_len()
+    }
+
+    fn with_new_prefix(&self, len: u8) -> Self {
+        Ipv4Net::new(self.addr(), len).unwrap().trunc()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct IpTrie {
+struct IpTrie<R>
+    where R: IpNet
+{
     root: Option<Rc<RefCell<IpTrieNode>>>,
+    phantom_net: PhantomData<R>
 }
 
-impl IpTrie {
-    fn new() -> IpTrie {
-        IpTrie { root: None }
+impl<R> IpTrie<R>
+    where R: IpNet
+{
+    fn new() -> IpTrie<R> {
+        IpTrie {
+            root: None,
+            phantom_net: PhantomData,
+        }
     }
 
-    fn insert(&mut self, network: Ipv4Net) {
+    fn insert(&mut self, network: R) {
         if self.root.is_none() {
             self.root = Some(Rc::new(RefCell::new(IpTrieNode::new())))
         }
 
         let mut node = self.root.clone().unwrap(); // The current node
 
-        // We care only the most significant bit of it.
-        // It is shifted left by 1 bit in each iteration of the loop.
-        let mut prefix: u32 = network.network().into();
-
-        for _ in 0..network.prefix_len() {
-            let i = (prefix >> 31) as usize;
-            prefix <<= 1;
-
+        let bits = network.prefix_bits();
+        for bit in bits {
+            let i = bit as usize;
             let child = node.borrow().children[i].clone();
             match child {
                 Some(child) => {
@@ -382,20 +468,19 @@ impl IpTrie {
         (*node.borrow_mut()).children = [None, None];
     }
 
-    fn search(&self, network: Ipv4Net) -> Option<Ipv4Net> {
+    fn search(&self, network: R) -> Option<R> {
         if self.root.is_none() {
             return None;
         }
         let mut node = self.root.clone().unwrap();
-        let mut prefix: u32 = network.network().into();
-        for i in 0..network.prefix_len() {
+
+        let bits = network.prefix_bits();
+        for (j, bit) in bits.into_iter().enumerate() {
             if node.borrow().is_leaf() {
-                return Ipv4Net::new(network.addr(), i).ok().map(|n| n.trunc());
+                return Some(network.with_new_prefix(j as u8));
             }
 
-            let i = (prefix >> 31) as usize;
-            prefix <<= 1;
-
+            let i = bit as usize;
             let child = node.borrow().children[i].clone();
             match child {
                 Some(child) => node = child,
@@ -404,7 +489,7 @@ impl IpTrie {
         }
 
         if node.borrow().is_leaf() {
-            Some(network.trunc())
+            Some(network)
         } else {
             None
         }
@@ -424,10 +509,14 @@ impl IpTrie {
         //        })
     }
 
-    fn remove(&mut self, network: Ipv4Net) {
-        if let Some(root) = self.root.as_ref() {
-            root.borrow_mut()
-                .remove(network.network().into(), network.prefix_len());
+    fn remove(&mut self, network: R) {
+        let root = self.root.clone();
+        if let Some(root) = root.as_ref() {
+            let mut bits = network.prefix_bits();
+            match bits.next() {
+                Some(next_bit) => root.borrow_mut().remove(bits, next_bit),
+                None => self.root = None // Reinitialize the trie
+            }
         }
     }
 
@@ -439,7 +528,7 @@ impl IpTrie {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct IpTrieNode {
+pub struct IpTrieNode {
     children: [Option<Rc<RefCell<IpTrieNode>>>; 2],
 }
 
@@ -495,9 +584,11 @@ impl IpTrieNode {
     //        }
     //    }
 
-    fn remove(&mut self, prefix: u32, prefix_size: u8) {
-        let i = (prefix >> 31) as usize;
-        let prefix = prefix << 1;
+    fn remove<I>(&mut self, mut bits: I, current_bit: bool)
+        where I: Iterator<Item=bool>
+    {
+        let i = current_bit as usize;
+        let next_bit = bits.next();
 
         // If the current node is a leaf node, and we have a network
         // to remove, we must split it into two deeper nodes.
@@ -508,23 +599,23 @@ impl IpTrieNode {
             ];
         }
 
-        // Remove the node that represents the network.
-        if prefix_size == 1 {
-            self.children[i] = None;
-            return;
-        }
+        match next_bit {
+            Some(next_bit) => if let Some(child) = self.children[i].clone() {
+                // Remove the deeper node recursively
+                child.borrow_mut().remove(bits, next_bit);
 
-        if let Some(child) = self.children[i].clone() {
-            // Remove the deeper node recursively
-            child.borrow_mut().remove(prefix, prefix_size - 1);
-
-            // In general, a leaf node represents a complete
-            // network. However, the child node cannot be a complete
-            // network after removing a network from it.
-            // This occurring indicates the only child of the
-            // child node is removed, and now this child node
-            // should be marked None.
-            if child.borrow().is_leaf() {
+                // In general, a leaf node represents a complete
+                // network. However, the child node cannot be a complete
+                // network after removing a network from it.
+                // This occurring indicates the only child of the
+                // child node is removed, and now this child node
+                // should be marked None.
+                if child.borrow().is_leaf() {
+                    self.children[i] = None;
+                }
+            },
+            None => {
+                // Remove the node that represents the network.
                 self.children[i] = None;
             }
         }
@@ -545,7 +636,8 @@ mod tests {
         assert!("192.168.5.130/0.0.0.256".parse::<Ipv4Net>().is_err());
     }
 
-    impl IpRange {
+    impl IpRange<Ipv4Net>
+    {
         fn get_network(&self, prefix_size: usize, prefix: &str) -> Option<Ipv4Net> {
             self.trie
                 .search(format!("{}/{}", prefix, prefix_size).parse().unwrap())
@@ -736,21 +828,22 @@ mod tests {
     }
 
 
-    impl IpRange {
+    impl IpRange<Ipv4Net>
+    {
         fn contains_ip(&self, ip: &str) -> bool {
-            self.includes(ip.parse::<Ipv4Addr>().unwrap())
+            self.contains(&ip.parse::<Ipv4Addr>().unwrap())
         }
 
         fn find_network_by_ip(&self, ip: &str) -> Option<Ipv4Net> {
-            self.find(ip.parse::<Ipv4Addr>().unwrap())
+            self.supernet(&ip.parse::<Ipv4Addr>().unwrap())
         }
 
-        fn includes_network(&self, network: &str) -> bool {
-            self.includes(network.parse::<Ipv4Net>().unwrap())
+        fn contains_network(&self, network: &str) -> bool {
+            self.contains(&network.parse::<Ipv4Net>().unwrap())
         }
 
         fn super_network_by_network(&self, network: &str) -> Option<Ipv4Net> {
-            self.supernet(network.parse().unwrap())
+            self.supernet(&network.parse::<Ipv4Net>().unwrap())
         }
     }
 
@@ -870,19 +963,19 @@ mod tests {
     }
 
     #[test]
-    fn includes_network_with_one_network() {
+    fn contains_network_with_one_network() {
         let mut ip_range = IpRange::new();
         ip_range.add("192.168.0.0/24".parse().unwrap());
 
-        assert!(ip_range.includes_network("192.168.0.0/24"));
-        assert!(ip_range.includes_network("192.168.0.128/25"));
-        assert!(!ip_range.includes_network("192.168.0.0/23"));
-        assert!(!ip_range.includes_network("192.168.1.0/24"));
-        assert!(!ip_range.includes_network("192.167.0.0/24"));
+        assert!(ip_range.contains_network("192.168.0.0/24"));
+        assert!(ip_range.contains_network("192.168.0.128/25"));
+        assert!(!ip_range.contains_network("192.168.0.0/23"));
+        assert!(!ip_range.contains_network("192.168.1.0/24"));
+        assert!(!ip_range.contains_network("192.167.0.0/24"));
     }
 
     #[test]
-    fn includes_network_with_many_networks() {
+    fn contains_network_with_many_networks() {
         let mut ip_range = IpRange::new();
         ip_range
             .add("192.168.0.0/24".parse().unwrap())
@@ -890,39 +983,39 @@ mod tests {
             .add("10.0.0.0/8".parse().unwrap())
             .simplify();
 
-        assert!(ip_range.includes_network("192.168.0.128/25"));
-        assert!(ip_range.includes_network("172.16.32.0/20"));
-        assert!(ip_range.includes_network("10.10.0.0/16"));
-        assert!(!ip_range.includes_network("0.0.0.0/0"));
-        assert!(!ip_range.includes_network("8.0.0.0/6"));
-        assert!(!ip_range.includes_network("8.0.0.0/7"));
-        assert!(!ip_range.includes_network("11.0.0.0/9"));
-        assert!(!ip_range.includes_network("192.167.255.255/32"));
-        assert!(!ip_range.includes_network("255.0.0.0/8"));
+        assert!(ip_range.contains_network("192.168.0.128/25"));
+        assert!(ip_range.contains_network("172.16.32.0/20"));
+        assert!(ip_range.contains_network("10.10.0.0/16"));
+        assert!(!ip_range.contains_network("0.0.0.0/0"));
+        assert!(!ip_range.contains_network("8.0.0.0/6"));
+        assert!(!ip_range.contains_network("8.0.0.0/7"));
+        assert!(!ip_range.contains_network("11.0.0.0/9"));
+        assert!(!ip_range.contains_network("192.167.255.255/32"));
+        assert!(!ip_range.contains_network("255.0.0.0/8"));
     }
 
     #[test]
-    fn includes_network_boundary1() {
+    fn contains_network_boundary1() {
         let mut ip_range = IpRange::new();
         ip_range.add("0.0.0.0/0".parse().unwrap());
 
-        assert!(ip_range.includes_network("0.0.0.0/0"));
-        assert!(ip_range.includes_network("8.0.0.0/6"));
-        assert!(ip_range.includes_network("11.0.0.0/9"));
-        assert!(ip_range.includes_network("192.168.0.128/25"));
-        assert!(ip_range.includes_network("255.255.255.255/32"));
+        assert!(ip_range.contains_network("0.0.0.0/0"));
+        assert!(ip_range.contains_network("8.0.0.0/6"));
+        assert!(ip_range.contains_network("11.0.0.0/9"));
+        assert!(ip_range.contains_network("192.168.0.128/25"));
+        assert!(ip_range.contains_network("255.255.255.255/32"));
     }
 
     #[test]
-    fn includes_network_boundary2() {
+    fn contains_network_boundary2() {
         let mut ip_range = IpRange::new();
         ip_range.add("254.254.254.254/32".parse().unwrap());
 
-        assert!(!ip_range.includes_network("0.0.0.0/0"));
-        assert!(!ip_range.includes_network("8.0.0.0/6"));
-        assert!(!ip_range.includes_network("254.254.0.0/16"));
-        assert!(ip_range.includes_network("254.254.254.254/32"));
-        assert!(!ip_range.includes_network("255.255.255.255/32"));
+        assert!(!ip_range.contains_network("0.0.0.0/0"));
+        assert!(!ip_range.contains_network("8.0.0.0/6"));
+        assert!(!ip_range.contains_network("254.254.0.0/16"));
+        assert!(ip_range.contains_network("254.254.254.254/32"));
+        assert!(!ip_range.contains_network("255.255.255.255/32"));
     }
 
     #[test]
@@ -1170,7 +1263,7 @@ mod tests {
     fn intersect_disjoint() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let network1 = "10.0.0.0/8".parse().unwrap();
+        let network1: Ipv4Net = "10.0.0.0/8".parse().unwrap();
         let network2 = "172.16.0.0/16".parse().unwrap();
         let network3 = "192.168.1.0/24".parse().unwrap();
         let network4 = "254.254.254.254/32".parse().unwrap();
@@ -1246,7 +1339,7 @@ mod tests {
     fn exclude_disjoint() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let network1 = "10.0.0.0/8".parse().unwrap();
+        let network1: Ipv4Net = "10.0.0.0/8".parse().unwrap();
         let network2 = "172.16.0.0/16".parse().unwrap();
         let network3 = "192.168.1.0/24".parse().unwrap();
         let network4 = "254.254.254.254/32".parse().unwrap();
@@ -1261,7 +1354,7 @@ mod tests {
     fn exclude_larger() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let network1 = "172.16.4.0/24".parse().unwrap();
+        let network1: Ipv4Net = "172.16.4.0/24".parse().unwrap();
         let network2 = "192.168.1.0/24".parse().unwrap();
         let network3 = "172.16.4.0/22".parse().unwrap();
         ip_range1.add(network1).add(network2);
@@ -1276,7 +1369,7 @@ mod tests {
     fn exclude_identical() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let network1 = "172.16.5.0/24".parse().unwrap();
+        let network1: Ipv4Net = "172.16.5.0/24".parse().unwrap();
         let network2 = "192.168.1.0/24".parse().unwrap();
         let network3 = "172.16.4.0/22".parse().unwrap();
         let network4 = "10.0.0.0/8".parse().unwrap();
@@ -1293,7 +1386,7 @@ mod tests {
     fn exclude_split1() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let network1 = "172.16.4.0/22".parse().unwrap();
+        let network1: Ipv4Net = "172.16.4.0/22".parse().unwrap();
         let network2 = "192.168.1.0/24".parse().unwrap();
         let network3 = "172.16.5.0/24".parse().unwrap();
         let network4 = "10.0.0.0/8".parse().unwrap();
@@ -1318,7 +1411,7 @@ mod tests {
     fn exclude_split2() {
         let mut ip_range1 = IpRange::new();
         let mut ip_range2 = IpRange::new();
-        let network1 = "172.16.4.0/22".parse().unwrap();
+        let network1: Ipv4Net = "172.16.4.0/22".parse().unwrap();
         let network2 = "192.168.1.0/24".parse().unwrap();
         let network3 = "172.16.4.0/24".parse().unwrap();
         let network4 = "10.0.0.0/8".parse().unwrap();
