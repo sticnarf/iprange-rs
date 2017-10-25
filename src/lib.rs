@@ -238,7 +238,7 @@ impl<R> IpRange<R>
     }
 }
 
-const HIGHEST_ONE: u32 = 1 << 31;
+const HIGHEST_ONE_U32: u32 = 1 << 31;
 
 impl<'a, R> IntoIterator for &'a IpRange<R>
     where R: IpNet + ToNetwork<R> + Clone
@@ -255,7 +255,7 @@ impl<'a, R> IntoIterator for &'a IpRange<R>
     }
 }
 
-/// Anything that can be converted to `Ipv4Net`.
+/// Anything that can be converted to `IpNet`.
 ///
 /// Due to limitation of Rust's type system,
 /// this trait is only implemented for some
@@ -265,13 +265,6 @@ pub trait ToNetwork<R: IpNet> {
 }
 
 impl ToNetwork<Ipv4Net> for Ipv4Net {
-    #[inline]
-    fn to_network(&self) -> Ipv4Net {
-        self.trunc()
-    }
-}
-
-impl<'a> ToNetwork<Ipv4Net> for &'a Ipv4Net {
     #[inline]
     fn to_network(&self) -> Ipv4Net {
         self.trunc()
@@ -343,7 +336,7 @@ impl TraverseState<Ipv4Net> for Ipv4TraverseState {
     }
 
     fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self {
-        let mask = if current_bit { HIGHEST_ONE >> self.prefix_len } else { 0 };
+        let mask = if current_bit { HIGHEST_ONE_U32 >> self.prefix_len } else { 0 };
         Ipv4TraverseState {
             node: next_node,
             prefix: self.prefix | mask,
@@ -422,7 +415,7 @@ impl Iterator for Ipv4PrefixBitIterator {
             let prefix = self.prefix;
             self.prefix <<= 1;
             self.prefix_len -= 1;
-            Some(prefix & HIGHEST_ONE != 0)
+            Some(prefix & HIGHEST_ONE_U32 != 0)
         } else {
             None
         }
