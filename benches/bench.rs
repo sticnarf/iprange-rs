@@ -47,7 +47,7 @@ fn parse_chnlists(b: &mut Bencher) {
 
 #[bench]
 fn new_ip_range(b: &mut Bencher) {
-    b.iter(|| IpRange::new());
+    b.iter(|| IpRange::<Ipv4Net>::new());
 }
 
 #[bench]
@@ -57,7 +57,7 @@ fn create_ip_range_with_chnlists(b: &mut Bencher) {
         chnlists
             .iter()
             .flat_map(|l| l.parse::<Ipv4Net>())
-            .collect::<IpRange>()
+            .collect::<IpRange<Ipv4Net>>()
     });
 }
 
@@ -67,8 +67,8 @@ fn test_10000_ips_in_chnlists(b: &mut Bencher) {
     let chnlists = chnlists()
         .iter()
         .flat_map(|l| l.parse::<Ipv4Net>())
-        .collect::<IpRange>();
-    b.iter(|| for &ip in &ip_list {
-        chnlists.includes(ip);
+        .collect::<IpRange<Ipv4Net>>();
+    b.iter(|| for ip in &ip_list {
+        chnlists.contains(ip);
     });
 }
