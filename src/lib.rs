@@ -394,21 +394,45 @@ pub trait IpNet
     where Self: Sized
 {
     type S: TraverseState<Self>;
+    type I: Iterator<Item=bool>;
 
-    fn prefix_bits(&self) -> Box<Iterator<Item=bool>>;
+    fn prefix_bits(&self) -> Self::I;
 
     fn prefix_len(&self) -> u8;
 
     fn with_new_prefix(&self, len: u8) -> Self;
 }
 
+pub struct Ipv4PrefixBitIterator {
+    prefix: u32,
+    prefix_len: u8
+}
+
+impl Iterator for Ipv4PrefixBitIterator {
+    type Item = bool;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.prefix_len > 0 {
+            let prefix = self.prefix;
+            self.prefix <<= 1;
+            self.prefix_len -= 1;
+            Some(prefix & HIGHEST_ONE != 0)
+        } else {
+            None
+        }
+    }
+}
+
 impl IpNet for Ipv4Net {
     type S = Ipv4TraverseState;
+    type I = Ipv4PrefixBitIterator;
 
-    fn prefix_bits(&self) -> Box<Iterator<Item=bool>> {
-        let network: u32 = self.network().into();
-        let iter = (0..self.prefix_len()).map(move |i| network & (HIGHEST_ONE >> i) != 0);
-        Box::new(iter)
+    fn prefix_bits(&self) -> Self::I {
+        let prefix: u32 = self.network().into();
+        Ipv4PrefixBitIterator {
+            prefix,
+            prefix_len: self.prefix_len()
+        }
     }
 
     fn prefix_len(&self) -> u8 {
