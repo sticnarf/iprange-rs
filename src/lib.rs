@@ -265,30 +265,35 @@ pub trait ToNetwork<R: IpNet> {
 }
 
 impl ToNetwork<Ipv4Net> for Ipv4Net {
+    #[inline]
     fn to_network(&self) -> Ipv4Net {
         self.trunc()
     }
 }
 
 impl<'a> ToNetwork<Ipv4Net> for &'a Ipv4Net {
+    #[inline]
     fn to_network(&self) -> Ipv4Net {
         self.trunc()
     }
 }
 
 impl ToNetwork<Ipv4Net> for Ipv4Addr {
+    #[inline]
     fn to_network(&self) -> Ipv4Net {
         Ipv4Net::new(*self, 32).unwrap()
     }
 }
 
 impl ToNetwork<Ipv4Net> for u32 {
+    #[inline]
     fn to_network(&self) -> Ipv4Net {
         Ipv4Net::new((*self).into(), 32).unwrap()
     }
 }
 
 impl ToNetwork<Ipv4Net> for [u8; 4] {
+    #[inline]
     fn to_network(&self) -> Ipv4Net {
         Ipv4Net::new((*self).into(), 32).unwrap()
     }
@@ -321,7 +326,7 @@ pub struct Ipv4TraverseState
 {
     node: Rc<RefCell<IpTrieNode>>,
     prefix: u32,
-    prefix_len: u8
+    prefix_len: u32
 }
 
 impl TraverseState<Ipv4Net> for Ipv4TraverseState {
@@ -347,7 +352,7 @@ impl TraverseState<Ipv4Net> for Ipv4TraverseState {
     }
 
     fn build(&self) -> Ipv4Net {
-        Ipv4Net::new(self.prefix.into(), self.prefix_len).unwrap()
+        Ipv4Net::new(self.prefix.into(), self.prefix_len as u8).unwrap()
     }
 }
 
@@ -411,6 +416,7 @@ pub struct Ipv4PrefixBitIterator {
 impl Iterator for Ipv4PrefixBitIterator {
     type Item = bool;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.prefix_len > 0 {
             let prefix = self.prefix;
@@ -427,18 +433,21 @@ impl IpNet for Ipv4Net {
     type S = Ipv4TraverseState;
     type I = Ipv4PrefixBitIterator;
 
+    #[inline]
     fn prefix_bits(&self) -> Self::I {
-        let prefix: u32 = self.network().into();
+        let prefix: u32 = self.addr().into();
         Ipv4PrefixBitIterator {
             prefix,
             prefix_len: self.prefix_len()
         }
     }
 
+    #[inline]
     fn prefix_len(&self) -> u8 {
         self.prefix_len()
     }
 
+    #[inline]
     fn with_new_prefix(&self, len: u8) -> Self {
         Ipv4Net::new(self.addr(), len).unwrap().trunc()
     }
@@ -519,18 +528,18 @@ impl<R> IpTrie<R>
         }
 
         // The commented code below is more clear. However, this uses a
-        // commented recursive method `search` in IpTrieNode, so the performance
+        // commented method `search` in IpTrieNode, and the performance
         // is relatively poorer that the implementation above.
 
-        //        self.root.as_ref().and_then(|root| {
-        //            root.borrow()
-        //                .search(network.addr().into(), network.prefix_len())
-        //                .and_then(|prefix_size| {
-        //                    Ipv4Net::new(network.addr(), prefix_size)
-        //                        .ok()
-        //                        .map(|n| n.trunc())
-        //                })
-        //        })
+        // self.root.as_ref().and_then(|root| {
+        //     let mut bits = network.prefix_bits();
+        //     let first_bit = bits.next();
+        //     root.borrow()
+        //         .search(bits, first_bit, 0)
+        //         .map(|prefix_size| {
+        //             network.with_new_prefix(prefix_size)
+        //         })
+        // })
     }
 
     fn remove(&mut self, network: R) {
@@ -566,6 +575,7 @@ impl IpTrieNode {
     // If both the zero child and the one child of a node are None,
     // it is a leaf node, and it represents a network whose
     // prefix is the path from root to it.
+    #[inline]
     fn is_leaf(&self) -> bool {
         self.children[0].is_none() && self.children[1].is_none()
     }
@@ -590,21 +600,21 @@ impl IpTrieNode {
         }
     }
 
-    //    fn search(&self, prefix: u32, prefix_size: u8) -> Option<u8> {
-    //        let i = (prefix >> 31) as usize;
-    //        let prefix = prefix << 1;
-    //
+    //    fn search<I>(&self, mut bits: I, current_bit: Option<bool>, acc: u8) -> Option<u8>
+    //        where I: Iterator<Item=bool>
+    //    {
     //        if self.is_leaf() {
-    //            Some(0)
-    //        } else if prefix_size <= 0 {
-    //            None
+    //            Some(acc)
     //        } else {
-    //            self.children[i].clone().and_then(|child| {
-    //                child
-    //                    .borrow_mut()
-    //                    .search(prefix, prefix_size - 1)
-    //                    .map(|x| x + 1)
-    //            })
+    //            if let Some(current_bit) = current_bit {
+    //                if let Some(child) = self.children[current_bit as usize].clone() {
+    //                    let next_bit = bits.next();
+    //                    return child
+    //                        .borrow_mut()
+    //                        .search(bits, next_bit, acc + 1);
+    //                }
+    //            }
+    //            None
     //        }
     //    }
 
