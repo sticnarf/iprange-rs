@@ -40,13 +40,13 @@
 
 extern crate ipnet;
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::iter::FromIterator;
 use std::collections::VecDeque;
 use std::marker::{Sized, PhantomData};
-use ipnet::Ipv4Net;
+use ipnet::{Ipv4Net, Ipv6Net};
 
 /// A set of networks that supports various operations:
 ///
@@ -238,8 +238,6 @@ impl<R> IpRange<R>
     }
 }
 
-const HIGHEST_ONE_U32: u32 = 1 << 31;
-
 impl<'a, R> IntoIterator for &'a IpRange<R>
     where R: IpNet + ToNetwork<R> + Clone
 {
@@ -255,6 +253,19 @@ impl<'a, R> IntoIterator for &'a IpRange<R>
     }
 }
 
+pub trait IpNet
+    where Self: Sized
+{
+    type S: TraverseState<Net=Self>;
+    type I: Iterator<Item=bool>;
+
+    fn prefix_bits(&self) -> Self::I;
+
+    fn prefix_len(&self) -> u8;
+
+    fn with_new_prefix(&self, len: u8) -> Self;
+}
+
 /// Anything that can be converted to `IpNet`.
 ///
 /// Due to limitation of Rust's type system,
@@ -262,34 +273,6 @@ impl<'a, R> IntoIterator for &'a IpRange<R>
 /// concrete types.
 pub trait ToNetwork<R: IpNet> {
     fn to_network(&self) -> R;
-}
-
-impl ToNetwork<Ipv4Net> for Ipv4Net {
-    #[inline]
-    fn to_network(&self) -> Ipv4Net {
-        self.trunc()
-    }
-}
-
-impl ToNetwork<Ipv4Net> for Ipv4Addr {
-    #[inline]
-    fn to_network(&self) -> Ipv4Net {
-        Ipv4Net::new(*self, 32).unwrap()
-    }
-}
-
-impl ToNetwork<Ipv4Net> for u32 {
-    #[inline]
-    fn to_network(&self) -> Ipv4Net {
-        Ipv4Net::new((*self).into(), 32).unwrap()
-    }
-}
-
-impl ToNetwork<Ipv4Net> for [u8; 4] {
-    #[inline]
-    fn to_network(&self) -> Ipv4Net {
-        Ipv4Net::new((*self).into(), 32).unwrap()
-    }
 }
 
 /// An iterator over the networks in an [`IpRange`].
@@ -303,50 +286,17 @@ pub struct IpRangeIter<R>
     queue: VecDeque<R::S>,
 }
 
-pub trait TraverseState<R>
-    where R: IpNet
+pub trait TraverseState
 {
+    type Net: IpNet;
+
     fn node(&self) -> Rc<RefCell<IpTrieNode>>;
 
     fn init(root: Rc<RefCell<IpTrieNode>>) -> Self;
 
     fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self;
 
-    fn build(&self) -> R;
-}
-
-pub struct Ipv4TraverseState
-{
-    node: Rc<RefCell<IpTrieNode>>,
-    prefix: u32,
-    prefix_len: u32
-}
-
-impl TraverseState<Ipv4Net> for Ipv4TraverseState {
-    fn node(&self) -> Rc<RefCell<IpTrieNode>> {
-        self.node.clone()
-    }
-
-    fn init(root: Rc<RefCell<IpTrieNode>>) -> Self {
-        Ipv4TraverseState {
-            node: root,
-            prefix: 0,
-            prefix_len: 0
-        }
-    }
-
-    fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self {
-        let mask = if current_bit { HIGHEST_ONE_U32 >> self.prefix_len } else { 0 };
-        Ipv4TraverseState {
-            node: next_node,
-            prefix: self.prefix | mask,
-            prefix_len: self.prefix_len + 1
-        }
-    }
-
-    fn build(&self) -> Ipv4Net {
-        Ipv4Net::new(self.prefix.into(), self.prefix_len as u8).unwrap()
-    }
+    fn build(&self) -> Self::Net;
 }
 
 impl<R> Iterator for IpRangeIter<R>
@@ -385,64 +335,6 @@ impl<R> FromIterator<R> for IpRange<R>
         }
         ip_range.simplify();
         ip_range
-    }
-}
-
-pub trait IpNet
-    where Self: Sized
-{
-    type S: TraverseState<Self>;
-    type I: Iterator<Item=bool>;
-
-    fn prefix_bits(&self) -> Self::I;
-
-    fn prefix_len(&self) -> u8;
-
-    fn with_new_prefix(&self, len: u8) -> Self;
-}
-
-pub struct Ipv4PrefixBitIterator {
-    prefix: u32,
-    prefix_len: u8
-}
-
-impl Iterator for Ipv4PrefixBitIterator {
-    type Item = bool;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.prefix_len > 0 {
-            let prefix = self.prefix;
-            self.prefix <<= 1;
-            self.prefix_len -= 1;
-            Some(prefix & HIGHEST_ONE_U32 != 0)
-        } else {
-            None
-        }
-    }
-}
-
-impl IpNet for Ipv4Net {
-    type S = Ipv4TraverseState;
-    type I = Ipv4PrefixBitIterator;
-
-    #[inline]
-    fn prefix_bits(&self) -> Self::I {
-        let prefix: u32 = self.addr().into();
-        Ipv4PrefixBitIterator {
-            prefix,
-            prefix_len: self.prefix_len()
-        }
-    }
-
-    #[inline]
-    fn prefix_len(&self) -> u8 {
-        self.prefix_len()
-    }
-
-    #[inline]
-    fn with_new_prefix(&self, len: u8) -> Self {
-        Ipv4Net::new(self.addr(), len).unwrap().trunc()
     }
 }
 
@@ -648,6 +540,242 @@ impl IpTrieNode {
         }
     }
 }
+
+const MSO_U8: u8 = 1 << 7; // Most significant one for u8
+const MSO_U32: u32 = 1 << 31; // Most significant one for u32
+
+impl IpNet for Ipv4Net {
+    type S = Ipv4TraverseState;
+    type I = Ipv4PrefixBitIterator;
+
+    #[inline]
+    fn prefix_bits(&self) -> Self::I {
+        let prefix: u32 = self.addr().into();
+        Ipv4PrefixBitIterator {
+            prefix,
+            prefix_len: self.prefix_len()
+        }
+    }
+
+    #[inline]
+    fn prefix_len(&self) -> u8 {
+        self.prefix_len()
+    }
+
+    #[inline]
+    fn with_new_prefix(&self, len: u8) -> Self {
+        Ipv4Net::new(self.addr(), len).unwrap().trunc()
+    }
+}
+
+impl ToNetwork<Ipv4Net> for Ipv4Net {
+    #[inline]
+    fn to_network(&self) -> Ipv4Net {
+        self.trunc()
+    }
+}
+
+impl ToNetwork<Ipv4Net> for Ipv4Addr {
+    #[inline]
+    fn to_network(&self) -> Ipv4Net {
+        Ipv4Net::new(*self, 32).unwrap()
+    }
+}
+
+impl ToNetwork<Ipv4Net> for u32 {
+    #[inline]
+    fn to_network(&self) -> Ipv4Net {
+        Ipv4Net::new((*self).into(), 32).unwrap()
+    }
+}
+
+impl ToNetwork<Ipv4Net> for [u8; 4] {
+    #[inline]
+    fn to_network(&self) -> Ipv4Net {
+        Ipv4Net::new((*self).into(), 32).unwrap()
+    }
+}
+
+pub struct Ipv4TraverseState
+{
+    node: Rc<RefCell<IpTrieNode>>,
+    prefix: u32,
+    prefix_len: u8
+}
+
+impl TraverseState for Ipv4TraverseState {
+    type Net = Ipv4Net;
+
+    #[inline]
+    fn node(&self) -> Rc<RefCell<IpTrieNode>> {
+        self.node.clone()
+    }
+
+    #[inline]
+    fn init(root: Rc<RefCell<IpTrieNode>>) -> Self {
+        Ipv4TraverseState {
+            node: root,
+            prefix: 0,
+            prefix_len: 0
+        }
+    }
+
+    #[inline]
+    fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self {
+        let mask = if current_bit { MSO_U32 >> self.prefix_len } else { 0 };
+        Ipv4TraverseState {
+            node: next_node,
+            prefix: self.prefix | mask,
+            prefix_len: self.prefix_len + 1
+        }
+    }
+
+    #[inline]
+    fn build(&self) -> Self::Net {
+        Ipv4Net::new(self.prefix.into(), self.prefix_len as u8).unwrap()
+    }
+}
+
+pub struct Ipv4PrefixBitIterator {
+    prefix: u32,
+    prefix_len: u8
+}
+
+impl Iterator for Ipv4PrefixBitIterator {
+    type Item = bool;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.prefix_len > 0 {
+            let prefix = self.prefix;
+            self.prefix <<= 1;
+            self.prefix_len -= 1;
+            Some(prefix & MSO_U32 != 0)
+        } else {
+            None
+        }
+    }
+}
+
+impl IpNet for Ipv6Net {
+    type S = Ipv6TraverseState;
+    type I = Ipv6PrefixBitIterator;
+
+    #[inline]
+    fn prefix_bits(&self) -> Self::I {
+        let prefix = self.addr().octets();
+        Ipv6PrefixBitIterator {
+            prefix,
+            prefix_len: self.prefix_len()
+        }
+    }
+
+    #[inline]
+    fn prefix_len(&self) -> u8 {
+        self.prefix_len()
+    }
+
+    #[inline]
+    fn with_new_prefix(&self, len: u8) -> Self {
+        Ipv6Net::new(self.addr(), len).unwrap().trunc()
+    }
+}
+
+impl ToNetwork<Ipv6Net> for Ipv6Net {
+    #[inline]
+    fn to_network(&self) -> Ipv6Net {
+        self.trunc()
+    }
+}
+
+impl ToNetwork<Ipv6Net> for Ipv6Addr {
+    #[inline]
+    fn to_network(&self) -> Ipv6Net {
+        Ipv6Net::new(*self, 128).unwrap()
+    }
+}
+
+impl ToNetwork<Ipv6Net> for [u8; 16] {
+    #[inline]
+    fn to_network(&self) -> Ipv6Net {
+        Ipv6Net::new((*self).into(), 128).unwrap()
+    }
+}
+
+impl ToNetwork<Ipv6Net> for [u16; 8] {
+    #[inline]
+    fn to_network(&self) -> Ipv6Net {
+        Ipv6Net::new((*self).into(), 128).unwrap()
+    }
+}
+
+pub struct Ipv6TraverseState
+{
+    node: Rc<RefCell<IpTrieNode>>,
+    prefix: [u8; 16],
+    prefix_len: u8
+}
+
+impl TraverseState for Ipv6TraverseState {
+    type Net = Ipv6Net;
+
+    #[inline]
+    fn node(&self) -> Rc<RefCell<IpTrieNode>> {
+        self.node.clone()
+    }
+
+    #[inline]
+    fn init(root: Rc<RefCell<IpTrieNode>>) -> Self {
+        Ipv6TraverseState {
+            node: root,
+            prefix: [0; 16],
+            prefix_len: 0
+        }
+    }
+
+    #[inline]
+    fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self {
+        let i = self.prefix_len / 8;
+        let mask = if current_bit { MSO_U8 >> (self.prefix_len % 8) } else { 0 };
+
+        let mut prefix = self.prefix;
+        prefix[i as usize] |= mask;
+
+        Ipv6TraverseState {
+            node: next_node,
+            prefix,
+            prefix_len: self.prefix_len + 1
+        }
+    }
+
+    #[inline]
+    fn build(&self) -> Self::Net {
+        Ipv6Net::new(self.prefix.into(), self.prefix_len as u8).unwrap()
+    }
+}
+
+pub struct Ipv6PrefixBitIterator {
+    prefix: [u8; 16],
+    prefix_len: u8
+}
+
+impl Iterator for Ipv6PrefixBitIterator {
+    type Item = bool;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.prefix_len > 0 {
+            let i = self.prefix_len / 8;
+            let mask = MSO_U8 >> (self.prefix_len % 8);
+
+            self.prefix_len -= 1;
+            Some(self.prefix[i as usize] & mask != 0)
+        } else {
+            None
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
