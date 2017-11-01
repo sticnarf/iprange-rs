@@ -1,7 +1,10 @@
 //! `iprange` is a library for managing IP ranges.
 //!
 //! An [`IpRange`] is a set of networks.
-//! You can add or remove a [`Ipv4Net`] from an [`IpRange`].
+//! The type of the networks it holds is specified by the generics type of [`IpRange`].
+//!
+//! You can add or remove an [`IpNet`] from an [`IpRange`].
+//! An [`IpNet`] can be either an `Ipv4Net` or an `Ipv6Net`.
 //!
 //! It also supports these useful operations:
 //!
@@ -30,9 +33,8 @@
 //! }
 //! ```
 //!
-//! Currently, this library supports IPv4 only.
-//!
 //! [`IpRange`]: struct.IpRange.html
+//! [`IpNet`]: trait.IpNet.html
 //! [`Ipv4Net`]: https://docs.rs/ipnet/1.0.0/ipnet/struct.Ipv4Net.html
 //! [`merge`]: struct.IpRange.html#method.merge
 //! [`intersect`]: struct.IpRange.html#method.intersect
@@ -86,19 +88,19 @@ use ipnet::{Ipv4Net, Ipv6Net};
 /// [`intersect`]: struct.IpRange.html#method.intersect
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpRange<R>
-    where R: IpNet + ToNetwork<R> + Clone
+pub struct IpRange<N>
+    where N: IpNet + ToNetwork<N> + Clone
 {
     // IpRange uses a radix trie to store networks
-    trie: IpTrie<R>,
-    phantom_net: PhantomData<R>,
+    trie: IpTrie<N>,
+    phantom_net: PhantomData<N>,
 }
 
-impl<R> IpRange<R>
-    where R: IpNet + ToNetwork<R> + Clone
+impl<N> IpRange<N>
+    where N: IpNet + ToNetwork<N> + Clone
 {
     /// Creates an empty `IpRange`.
-    pub fn new() -> IpRange<R> {
+    pub fn new() -> IpRange<N> {
         IpRange {
             trie: IpTrie::new(),
             phantom_net: PhantomData,
@@ -132,7 +134,7 @@ impl<R> IpRange<R>
     /// ```
     ///
     /// [`simplify`]: struct.IpRange.html#method.simplify
-    pub fn add(&mut self, network: R) -> &mut IpRange<R> {
+    pub fn add(&mut self, network: N) -> &mut IpRange<N> {
         self.trie.insert(network);
         self
     }
@@ -160,7 +162,7 @@ impl<R> IpRange<R>
     ///     // Now, ip_range has only one network: "192.168.1.0/24".
     /// }
     /// ```
-    pub fn remove(&mut self, network: R) -> &mut IpRange<R> {
+    pub fn remove(&mut self, network: N) -> &mut IpRange<N> {
         self.trie.remove(network);
         self
     }
@@ -196,7 +198,7 @@ impl<R> IpRange<R>
     /// that is either in `self` or in `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn merge(&self, other: &IpRange<R>) -> IpRange<R> {
+    pub fn merge(&self, other: &IpRange<N>) -> IpRange<N> {
         self.into_iter().chain(other.into_iter()).collect()
     }
 
@@ -204,7 +206,7 @@ impl<R> IpRange<R>
     /// that is in both `self` and `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn intersect(&self, other: &IpRange<R>) -> IpRange<R> {
+    pub fn intersect(&self, other: &IpRange<N>) -> IpRange<N> {
         let range1 = self.into_iter().filter(|network| other.contains(network));
         let range2 = other.into_iter().filter(|network| self.contains(network));
         range1.chain(range2).collect()
@@ -214,7 +216,7 @@ impl<R> IpRange<R>
     /// that is in `self` while not in `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn exclude(&self, other: &IpRange<R>) -> IpRange<R> {
+    pub fn exclude(&self, other: &IpRange<N>) -> IpRange<N> {
         let mut new = (*self).clone();
         for network in other {
             new.remove(network);
@@ -224,49 +226,57 @@ impl<R> IpRange<R>
 
     /// Tests if `self` contains `network`.
     ///
-    /// `network` is anything that can be converted into `R`.
-    /// See `ToNetwork<R>` for detail.
-    pub fn contains<T: ToNetwork<R>>(&self, network: &T) -> bool {
+    /// `network` is anything that can be converted into `N`.
+    /// See `ToNetwork<N>` for detail.
+    pub fn contains<T: ToNetwork<N>>(&self, network: &T) -> bool {
         self.supernet(&network.to_network()).is_some()
     }
 
     /// Returns the network in `self` which is the supernetwork of `network`.
     ///
     /// Returns None if no network in `self` contains `network`.
-    pub fn supernet<T: ToNetwork<R>>(&self, network: &T) -> Option<R> {
+    pub fn supernet<T: ToNetwork<N>>(&self, network: &T) -> Option<N> {
         self.trie.search(network.to_network())
     }
 
-    pub fn iter(&self) -> IpRangeIter<R> {
+    /// Returns the iterator to `&self`.
+    pub fn iter(&self) -> IpRangeIter<N> {
         self.into_iter()
     }
 }
 
-impl<'a, R> IntoIterator for &'a IpRange<R>
-    where R: IpNet + ToNetwork<R> + Clone
+impl<'a, N> IntoIterator for &'a IpRange<N>
+    where N: IpNet + ToNetwork<N> + Clone
 {
-    type Item = R;
-    type IntoIter = IpRangeIter<R>;
+    type Item = N;
+    type IntoIter = IpRangeIter<N>;
 
     fn into_iter(self) -> Self::IntoIter {
         let mut queue = VecDeque::new();
         if let Some(root) = self.trie.root.as_ref() {
-            queue.push_back(R::S::init(root.clone()));
+            queue.push_back(N::S::init(root.clone()));
         }
         IpRangeIter { queue }
     }
 }
 
+/// An abstraction for IP networks.
 pub trait IpNet
     where Self: Sized
 {
+    /// Used for internal traversing.
     type S: TraverseState<Net=Self>;
+
+    ///`I` is an iterator to the prefix bits of the network.
     type I: Iterator<Item=bool>;
 
+    /// Returns the iterator to the prefix bits of the network.
     fn prefix_bits(&self) -> Self::I;
 
+    /// Returns the prefix length.
     fn prefix_len(&self) -> u8;
 
+    /// Returns a copy of the network with the address truncated to the given length.
     fn with_new_prefix(&self, len: u8) -> Self;
 }
 
@@ -275,8 +285,8 @@ pub trait IpNet
 /// Due to limitation of Rust's type system,
 /// this trait is only implemented for some
 /// concrete types.
-pub trait ToNetwork<R: IpNet> {
-    fn to_network(&self) -> R;
+pub trait ToNetwork<N: IpNet> {
+    fn to_network(&self) -> N;
 }
 
 /// An iterator over the networks in an [`IpRange`].
@@ -284,12 +294,15 @@ pub trait ToNetwork<R: IpNet> {
 /// BFS (Breadth-First-Search) is used for traversing the inner Radix Trie.
 ///
 /// [`IpRange`]: struct.IpRange.html
-pub struct IpRangeIter<R>
-    where R: IpNet
+pub struct IpRangeIter<N>
+    where N: IpNet
 {
-    queue: VecDeque<R::S>,
+    queue: VecDeque<N::S>,
 }
 
+/// Used for internal traversing.
+///
+/// You can simply ignore this trait.
 pub trait TraverseState
 {
     type Net: IpNet;
@@ -303,10 +316,10 @@ pub trait TraverseState
     fn build(&self) -> Self::Net;
 }
 
-impl<R> Iterator for IpRangeIter<R>
-    where R: IpNet
+impl<N> Iterator for IpRangeIter<N>
+    where N: IpNet
 {
-    type Item = R;
+    type Item = N;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(elem) = self.queue.pop_front() {
@@ -327,11 +340,11 @@ impl<R> Iterator for IpRangeIter<R>
     }
 }
 
-impl<R> FromIterator<R> for IpRange<R>
-    where R: IpNet + ToNetwork<R> + Clone
+impl<N> FromIterator<N> for IpRange<N>
+    where N: IpNet + ToNetwork<N> + Clone
 {
     fn from_iter<T>(iter: T) -> Self
-        where T: IntoIterator<Item=R>,
+        where T: IntoIterator<Item=N>,
     {
         let mut ip_range = IpRange::new();
         for network in iter {
@@ -343,24 +356,24 @@ impl<R> FromIterator<R> for IpRange<R>
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct IpTrie<R>
-    where R: IpNet
+struct IpTrie<N>
+    where N: IpNet
 {
     root: Option<Rc<RefCell<IpTrieNode>>>,
-    phantom_net: PhantomData<R>
+    phantom_net: PhantomData<N>
 }
 
-impl<R> IpTrie<R>
-    where R: IpNet
+impl<N> IpTrie<N>
+    where N: IpNet
 {
-    fn new() -> IpTrie<R> {
+    fn new() -> IpTrie<N> {
         IpTrie {
             root: None,
             phantom_net: PhantomData,
         }
     }
 
-    fn insert(&mut self, network: R) {
+    fn insert(&mut self, network: N) {
         if self.root.is_none() {
             self.root = Some(Rc::new(RefCell::new(IpTrieNode::new())))
         }
@@ -390,7 +403,7 @@ impl<R> IpTrie<R>
         (*node.borrow_mut()).children = [None, None];
     }
 
-    fn search(&self, network: R) -> Option<R> {
+    fn search(&self, network: N) -> Option<N> {
         if self.root.is_none() {
             return None;
         }
@@ -431,7 +444,7 @@ impl<R> IpTrie<R>
         // })
     }
 
-    fn remove(&mut self, network: R) {
+    fn remove(&mut self, network: N) {
         let root = self.root.clone();
         if let Some(root) = root.as_ref() {
             let mut bits = network.prefix_bits();
@@ -449,6 +462,7 @@ impl<R> IpTrie<R>
     }
 }
 
+/// Node of the inner radix trie.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpTrieNode {
     children: [Option<Rc<RefCell<IpTrieNode>>>; 2],
