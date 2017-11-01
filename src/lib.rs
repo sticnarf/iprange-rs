@@ -236,6 +236,10 @@ impl<R> IpRange<R>
     pub fn supernet<T: ToNetwork<R>>(&self, network: &T) -> Option<R> {
         self.trie.search(network.to_network())
     }
+
+    pub fn iter(&self) -> IpRangeIter<R> {
+        self.into_iter()
+    }
 }
 
 impl<'a, R> IntoIterator for &'a IpRange<R>
@@ -666,7 +670,8 @@ impl IpNet for Ipv6Net {
         let prefix = self.addr().octets();
         Ipv6PrefixBitIterator {
             prefix,
-            prefix_len: self.prefix_len()
+            prefix_len: self.prefix_len(),
+            index: 0
         }
     }
 
@@ -756,7 +761,8 @@ impl TraverseState for Ipv6TraverseState {
 
 pub struct Ipv6PrefixBitIterator {
     prefix: [u8; 16],
-    prefix_len: u8
+    prefix_len: u8,
+    index: u8
 }
 
 impl Iterator for Ipv6PrefixBitIterator {
@@ -764,11 +770,11 @@ impl Iterator for Ipv6PrefixBitIterator {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.prefix_len > 0 {
-            let i = self.prefix_len / 8;
-            let mask = MSO_U8 >> (self.prefix_len % 8);
+        if self.index < self.prefix_len {
+            let i = self.index / 8;
+            let mask = MSO_U8 >> (self.index & 0b0000_0111u8);
 
-            self.prefix_len -= 1;
+            self.index += 1;
             Some(self.prefix[i as usize] & mask != 0)
         } else {
             None
@@ -1585,5 +1591,34 @@ mod tests {
             "172.16.6.0/23".parse().ok(),
             ip_range.get_network(23, "172.16.6.0")
         );
+    }
+
+    #[test]
+    fn iter_ipv4() {
+        let mut data = vec![
+            "1.0.1.0/24",
+            "1.0.2.0/23",
+            "1.0.8.0/21"
+        ];
+        let ip_range: IpRange<Ipv4Net> = data.iter().map(|net| net.parse().unwrap()).collect();
+        let mut nets: Vec<String> = ip_range.iter().map(|net| format!("{}", net)).collect();
+        data.sort_unstable();
+        nets.sort_unstable();
+        assert_eq!(nets, data);
+    }
+
+    #[test]
+    fn iter_ipv6() {
+        let mut data = vec![
+            "2400:9a40::/32",
+            "2400:9dc0::/32",
+            "2400:9e00::/32",
+            "2400:a040::/32"
+        ];
+        let ip_range: IpRange<Ipv6Net> = data.iter().map(|net| net.parse().unwrap()).collect();
+        let mut nets: Vec<String> = ip_range.iter().map(|net| format!("{}", net)).collect();
+        data.sort_unstable();
+        nets.sort_unstable();
+        assert_eq!(nets, data);
     }
 }
