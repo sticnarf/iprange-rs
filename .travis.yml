@@ -7,3 +7,6 @@ matrix:
   allow_failures:
     - rust: nightly
 cache: cargo
+script:
+- cargo test --verbose
+- (test $TRAVIS_RUST_VERSION != "nightly" || cargo bench)
