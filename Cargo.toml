@@ -6,6 +6,7 @@ description = "A library to manage IP ranges"
 repository = "https://github.com/sticnarf/iprange-rs"
 readme = "README.md"
 documentation = "https://docs.rs/iprange/"
+categories = ["network-programming"]
 license = "MIT"
 
 [badges]

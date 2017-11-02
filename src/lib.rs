@@ -47,7 +47,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::iter::FromIterator;
 use std::collections::VecDeque;
-use std::marker::{Sized, PhantomData};
+use std::marker::{PhantomData, Sized};
 use ipnet::{Ipv4Net, Ipv6Net};
 
 /// A set of networks that supports various operations:
@@ -89,7 +89,8 @@ use ipnet::{Ipv4Net, Ipv6Net};
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpRange<N>
-    where N: IpNet + ToNetwork<N> + Clone
+where
+    N: IpNet + ToNetwork<N> + Clone,
 {
     // IpRange uses a radix trie to store networks
     trie: IpTrie<N>,
@@ -97,7 +98,8 @@ pub struct IpRange<N>
 }
 
 impl<N> IpRange<N>
-    where N: IpNet + ToNetwork<N> + Clone
+where
+    N: IpNet + ToNetwork<N> + Clone,
 {
     /// Creates an empty `IpRange`.
     pub fn new() -> IpRange<N> {
@@ -246,7 +248,8 @@ impl<N> IpRange<N>
 }
 
 impl<'a, N> IntoIterator for &'a IpRange<N>
-    where N: IpNet + ToNetwork<N> + Clone
+where
+    N: IpNet + ToNetwork<N> + Clone,
 {
     type Item = N;
     type IntoIter = IpRangeIter<N>;
@@ -262,13 +265,14 @@ impl<'a, N> IntoIterator for &'a IpRange<N>
 
 /// An abstraction for IP networks.
 pub trait IpNet
-    where Self: Sized
+where
+    Self: Sized,
 {
     /// Used for internal traversing.
-    type S: TraverseState<Net=Self>;
+    type S: TraverseState<Net = Self>;
 
     ///`I` is an iterator to the prefix bits of the network.
-    type I: Iterator<Item=bool>;
+    type I: Iterator<Item = bool>;
 
     /// Returns the iterator to the prefix bits of the network.
     fn prefix_bits(&self) -> Self::I;
@@ -295,7 +299,8 @@ pub trait ToNetwork<N: IpNet> {
 ///
 /// [`IpRange`]: struct.IpRange.html
 pub struct IpRangeIter<N>
-    where N: IpNet
+where
+    N: IpNet,
 {
     queue: VecDeque<N::S>,
 }
@@ -303,8 +308,7 @@ pub struct IpRangeIter<N>
 /// Used for internal traversing.
 ///
 /// You can simply ignore this trait.
-pub trait TraverseState
-{
+pub trait TraverseState {
     type Net: IpNet;
 
     fn node(&self) -> Rc<RefCell<IpTrieNode>>;
@@ -317,7 +321,8 @@ pub trait TraverseState
 }
 
 impl<N> Iterator for IpRangeIter<N>
-    where N: IpNet
+where
+    N: IpNet,
 {
     type Item = N;
 
@@ -341,10 +346,12 @@ impl<N> Iterator for IpRangeIter<N>
 }
 
 impl<N> FromIterator<N> for IpRange<N>
-    where N: IpNet + ToNetwork<N> + Clone
+where
+    N: IpNet + ToNetwork<N> + Clone,
 {
     fn from_iter<T>(iter: T) -> Self
-        where T: IntoIterator<Item=N>,
+    where
+        T: IntoIterator<Item = N>,
     {
         let mut ip_range = IpRange::new();
         for network in iter {
@@ -357,14 +364,16 @@ impl<N> FromIterator<N> for IpRange<N>
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct IpTrie<N>
-    where N: IpNet
+where
+    N: IpNet,
 {
     root: Option<Rc<RefCell<IpTrieNode>>>,
-    phantom_net: PhantomData<N>
+    phantom_net: PhantomData<N>,
 }
 
 impl<N> IpTrie<N>
-    where N: IpNet
+where
+    N: IpNet,
 {
     fn new() -> IpTrie<N> {
         IpTrie {
@@ -450,7 +459,7 @@ impl<N> IpTrie<N>
             let mut bits = network.prefix_bits();
             match bits.next() {
                 Some(next_bit) => root.borrow_mut().remove(bits, next_bit),
-                None => self.root = None // Reinitialize the trie
+                None => self.root = None, // Reinitialize the trie
             }
         }
     }
@@ -522,7 +531,8 @@ impl IpTrieNode {
     //    }
 
     fn remove<I>(&mut self, mut bits: I, current_bit: bool)
-        where I: Iterator<Item=bool>
+    where
+        I: Iterator<Item = bool>,
     {
         let i = current_bit as usize;
         let next_bit = bits.next();
@@ -571,7 +581,7 @@ impl IpNet for Ipv4Net {
         let prefix: u32 = self.addr().into();
         Ipv4PrefixBitIterator {
             prefix,
-            prefix_len: self.prefix_len()
+            prefix_len: self.prefix_len(),
         }
     }
 
@@ -614,11 +624,10 @@ impl ToNetwork<Ipv4Net> for [u8; 4] {
     }
 }
 
-pub struct Ipv4TraverseState
-{
+pub struct Ipv4TraverseState {
     node: Rc<RefCell<IpTrieNode>>,
     prefix: u32,
-    prefix_len: u8
+    prefix_len: u8,
 }
 
 impl TraverseState for Ipv4TraverseState {
@@ -634,17 +643,21 @@ impl TraverseState for Ipv4TraverseState {
         Ipv4TraverseState {
             node: root,
             prefix: 0,
-            prefix_len: 0
+            prefix_len: 0,
         }
     }
 
     #[inline]
     fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self {
-        let mask = if current_bit { MSO_U32 >> self.prefix_len } else { 0 };
+        let mask = if current_bit {
+            MSO_U32 >> self.prefix_len
+        } else {
+            0
+        };
         Ipv4TraverseState {
             node: next_node,
             prefix: self.prefix | mask,
-            prefix_len: self.prefix_len + 1
+            prefix_len: self.prefix_len + 1,
         }
     }
 
@@ -656,7 +669,7 @@ impl TraverseState for Ipv4TraverseState {
 
 pub struct Ipv4PrefixBitIterator {
     prefix: u32,
-    prefix_len: u8
+    prefix_len: u8,
 }
 
 impl Iterator for Ipv4PrefixBitIterator {
@@ -685,7 +698,7 @@ impl IpNet for Ipv6Net {
         Ipv6PrefixBitIterator {
             prefix,
             prefix_len: self.prefix_len(),
-            index: 0
+            index: 0,
         }
     }
 
@@ -728,11 +741,10 @@ impl ToNetwork<Ipv6Net> for [u16; 8] {
     }
 }
 
-pub struct Ipv6TraverseState
-{
+pub struct Ipv6TraverseState {
     node: Rc<RefCell<IpTrieNode>>,
     prefix: [u8; 16],
-    prefix_len: u8
+    prefix_len: u8,
 }
 
 impl TraverseState for Ipv6TraverseState {
@@ -748,14 +760,18 @@ impl TraverseState for Ipv6TraverseState {
         Ipv6TraverseState {
             node: root,
             prefix: [0; 16],
-            prefix_len: 0
+            prefix_len: 0,
         }
     }
 
     #[inline]
     fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self {
         let i = self.prefix_len / 8;
-        let mask = if current_bit { MSO_U8 >> (self.prefix_len % 8) } else { 0 };
+        let mask = if current_bit {
+            MSO_U8 >> (self.prefix_len % 8)
+        } else {
+            0
+        };
 
         let mut prefix = self.prefix;
         prefix[i as usize] |= mask;
@@ -763,7 +779,7 @@ impl TraverseState for Ipv6TraverseState {
         Ipv6TraverseState {
             node: next_node,
             prefix,
-            prefix_len: self.prefix_len + 1
+            prefix_len: self.prefix_len + 1,
         }
     }
 
@@ -776,7 +792,7 @@ impl TraverseState for Ipv6TraverseState {
 pub struct Ipv6PrefixBitIterator {
     prefix: [u8; 16],
     prefix_len: u8,
-    index: u8
+    index: u8,
 }
 
 impl Iterator for Ipv6PrefixBitIterator {
@@ -811,8 +827,7 @@ mod tests {
         assert!("192.168.5.130/0.0.0.256".parse::<Ipv4Net>().is_err());
     }
 
-    impl IpRange<Ipv4Net>
-    {
+    impl IpRange<Ipv4Net> {
         fn get_network(&self, prefix_size: usize, prefix: &str) -> Option<Ipv4Net> {
             self.trie
                 .search(format!("{}/{}", prefix, prefix_size).parse().unwrap())
@@ -1003,8 +1018,7 @@ mod tests {
     }
 
 
-    impl IpRange<Ipv4Net>
-    {
+    impl IpRange<Ipv4Net> {
         fn contains_ip(&self, ip: &str) -> bool {
             self.contains(&ip.parse::<Ipv4Addr>().unwrap())
         }
@@ -1609,11 +1623,7 @@ mod tests {
 
     #[test]
     fn iter_ipv4() {
-        let mut data = vec![
-            "1.0.1.0/24",
-            "1.0.2.0/23",
-            "1.0.8.0/21"
-        ];
+        let mut data = vec!["1.0.1.0/24", "1.0.2.0/23", "1.0.8.0/21"];
         let ip_range: IpRange<Ipv4Net> = data.iter().map(|net| net.parse().unwrap()).collect();
         let mut nets: Vec<String> = ip_range.iter().map(|net| format!("{}", net)).collect();
         data.sort_unstable();
@@ -1627,7 +1637,7 @@ mod tests {
             "2400:9a40::/32",
             "2400:9dc0::/32",
             "2400:9e00::/32",
-            "2400:a040::/32"
+            "2400:a040::/32",
         ];
         let ip_range: IpRange<Ipv6Net> = data.iter().map(|net| net.parse().unwrap()).collect();
         let mut nets: Vec<String> = ip_range.iter().map(|net| format!("{}", net)).collect();
