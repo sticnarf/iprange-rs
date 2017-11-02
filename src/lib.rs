@@ -802,7 +802,7 @@ impl Iterator for Ipv6PrefixBitIterator {
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.prefix_len {
             let i = self.index / 8;
-            let mask = MSO_U8 >> (self.index & 0b0000_0111u8);
+            let mask = MSO_U8 >> (self.index % 8);
 
             self.index += 1;
             Some(self.prefix[i as usize] & mask != 0)

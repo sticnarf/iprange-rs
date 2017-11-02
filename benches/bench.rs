@@ -37,8 +37,7 @@ fn parse_one_ipv6_net(b: &mut Bencher) {
 
 fn read_lines_from_file(file_name: &str) -> Vec<String> {
     let path = PathBuf::from(file!());
-    let f =
-        File::open(path.with_file_name(file_name)).expect("Unable to open file");
+    let f = File::open(path.with_file_name(file_name)).expect("Unable to open file");
     let reader = BufReader::new(f);
     reader.lines().flat_map(|l| l).collect()
 }
@@ -58,11 +57,13 @@ fn rand_ipv4_list(n: usize) -> Vec<Ipv4Addr> {
 
 fn rand_ipv6_list(n: usize) -> Vec<Ipv6Addr> {
     let mut rng = StdRng::from_seed(&[1926, 8, 17]);
-    (0..n).map(|_| {
-        let mut buf = [0u8; 16];
-        rng.fill_bytes(&mut buf);
-        buf.into()
-    }).collect()
+    (0..n)
+        .map(|_| {
+            let mut buf = [0u8; 16];
+            rng.fill_bytes(&mut buf);
+            buf.into()
+        })
+        .collect()
 }
 
 #[bench]
@@ -126,3 +127,57 @@ fn test_10000_ips_in_chnlists_v6(b: &mut Bencher) {
         chnlists.contains(ip);
     });
 }
+
+// #[bench]
+// fn test_ipv4_against_go(b: &mut Bencher) {
+//     let ip_range = read_lines_from_file("cidr_ipv4_test.data")
+//         .iter()
+//         .flat_map(|l| l.parse::<Ipv4Net>())
+//         .collect::<IpRange<Ipv4Net>>();
+//     b.iter(|| {
+//         assert!(ip_range.contains(&"103.67.32.0".parse::<Ipv4Addr>().unwrap()));
+//         assert!(ip_range.contains(&"103.67.32.1".parse::<Ipv4Addr>().unwrap()));
+//         assert!(!ip_range
+//             .contains(&"103.67.100.77".parse::<Ipv4Addr>().unwrap()));
+//         assert!(ip_range.contains(&"3.0.0.0".parse::<Ipv4Addr>().unwrap()));
+//         assert!(ip_range.contains(&"216.255.255.255".parse::<Ipv4Addr>().unwrap()));
+//         assert!(!ip_range
+//             .contains(&"2.255.255.255".parse::<Ipv4Addr>().unwrap()));
+//         assert!(!ip_range
+//             .contains(&"217.0.0.0".parse::<Ipv4Addr>().unwrap()));
+//         assert!(!ip_range.contains(&"0.0.0.0".parse::<Ipv4Addr>().unwrap()));
+//         assert!(!ip_range.contains(&"255.255.255.255".parse::<Ipv4Addr>().unwrap()));
+//     });
+// }
+
+// #[bench]
+// fn test_ipv6_against_go(b: &mut Bencher) {
+//     let ip_range = read_lines_from_file("cidr_ipv6_test.data")
+//         .iter()
+//         .flat_map(|l| l.parse::<Ipv6Net>())
+//         .collect::<IpRange<Ipv6Net>>();
+//     b.iter(|| {
+//         assert!(ip_range.contains(&"2607:d200::".parse::<Ipv6Addr>().unwrap()));
+//         assert!(ip_range.contains(&"2607:d200::1".parse::<Ipv6Addr>().unwrap()));
+//         assert!(!ip_range.contains(&"2607:d201::ffff".parse::<Ipv6Addr>().unwrap()));
+//         assert!(ip_range.contains(&"2001:1800::".parse::<Ipv6Addr>().unwrap()));
+//         assert!(
+//             ip_range.contains(&"2a03:cd00:ffff:ffff:ffff:ffff:ffff:ffff"
+//                 .parse::<Ipv6Addr>()
+//                 .unwrap())
+//         );
+//         assert!(!ip_range.contains(
+//             &"2001:17ff:ffff:ffff:ffff:ffff:ffff:ffff"
+//                 .parse::<Ipv6Addr>()
+//                 .unwrap()
+//         ));
+//         assert!(!ip_range
+//             .contains(&"2a03:cd01::".parse::<Ipv6Addr>().unwrap()));
+//         assert!(!ip_range.contains(&"::".parse::<Ipv6Addr>().unwrap()));
+//         assert!(!ip_range.contains(
+//             &"ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+//                 .parse::<Ipv6Addr>()
+//                 .unwrap()
+//         ));
+//     });
+// }
