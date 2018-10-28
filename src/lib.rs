@@ -86,7 +86,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// [`intersect`]: struct.IpRange.html#method.intersect
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpRange<'a, N>
+pub struct IpRange<'a, N: 'a>
 where
     N: IpNet<'a> + ToNetwork<'a, N> + Clone,
 {
@@ -299,7 +299,7 @@ pub trait ToNetwork<'a, N: IpNet<'a>> {
 /// BFS (Breadth-First-Search) is used for traversing the inner Radix Trie.
 ///
 /// [`IpRange`]: struct.IpRange.html
-pub struct IpRangeIter<'a, N>
+pub struct IpRangeIter<'a, N: 'a>
 where
     N: IpNet<'a>,
 {
@@ -365,7 +365,7 @@ where
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct IpTrie<'a, N>
+struct IpTrie<'a, N: 'a>
 where
     N: IpNet<'a>,
 {
