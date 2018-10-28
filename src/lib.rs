@@ -42,13 +42,11 @@
 
 extern crate ipnet;
 
-use std::net::{Ipv4Addr, Ipv6Addr};
-use std::rc::Rc;
-use std::cell::RefCell;
-use std::iter::FromIterator;
-use std::collections::VecDeque;
-use std::marker::{PhantomData, Sized};
 use ipnet::{Ipv4Net, Ipv6Net};
+use std::collections::VecDeque;
+use std::iter::FromIterator;
+use std::marker::PhantomData;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// A set of networks that supports various operations:
 ///
@@ -88,21 +86,21 @@ use ipnet::{Ipv4Net, Ipv6Net};
 /// [`intersect`]: struct.IpRange.html#method.intersect
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpRange<N>
+pub struct IpRange<'a, N>
 where
-    N: IpNet + ToNetwork<N> + Clone,
+    N: IpNet<'a> + ToNetwork<'a, N> + Clone,
 {
     // IpRange uses a radix trie to store networks
-    trie: IpTrie<N>,
+    trie: IpTrie<'a, N>,
     phantom_net: PhantomData<N>,
 }
 
-impl<N> IpRange<N>
+impl<'a, N> IpRange<'a, N>
 where
-    N: IpNet + ToNetwork<N> + Clone,
+    N: IpNet<'a> + ToNetwork<'a, N> + Clone,
 {
     /// Creates an empty `IpRange`.
-    pub fn new() -> IpRange<N> {
+    pub fn new() -> IpRange<'a, N> {
         IpRange {
             trie: IpTrie::new(),
             phantom_net: PhantomData,
@@ -136,7 +134,7 @@ where
     /// ```
     ///
     /// [`simplify`]: struct.IpRange.html#method.simplify
-    pub fn add(&mut self, network: N) -> &mut IpRange<N> {
+    pub fn add(&mut self, network: N) -> &mut Self {
         self.trie.insert(network);
         self
     }
@@ -164,7 +162,7 @@ where
     ///     // Now, ip_range has only one network: "192.168.1.0/24".
     /// }
     /// ```
-    pub fn remove(&mut self, network: N) -> &mut IpRange<N> {
+    pub fn remove(&mut self, network: N) -> &mut Self {
         self.trie.remove(network);
         self
     }
@@ -200,7 +198,7 @@ where
     /// that is either in `self` or in `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn merge(&self, other: &IpRange<N>) -> IpRange<N> {
+    pub fn merge(&'a self, other: &'a IpRange<'a, N>) -> Self {
         self.into_iter().chain(other.into_iter()).collect()
     }
 
@@ -208,7 +206,7 @@ where
     /// that is in both `self` and `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn intersect(&self, other: &IpRange<N>) -> IpRange<N> {
+    pub fn intersect(&'a self, other: &'a IpRange<'a, N>) -> Self {
         let range1 = self.into_iter().filter(|network| other.contains(network));
         let range2 = other.into_iter().filter(|network| self.contains(network));
         range1.chain(range2).collect()
@@ -218,7 +216,7 @@ where
     /// that is in `self` while not in `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn exclude(&self, other: &IpRange<N>) -> IpRange<N> {
+    pub fn exclude(&'a self, other: &'a IpRange<'a, N>) -> IpRange<'a, N> {
         let mut new = (*self).clone();
         for network in other {
             new.remove(network);
@@ -230,47 +228,50 @@ where
     ///
     /// `network` is anything that can be converted into `N`.
     /// See `ToNetwork<N>` for detail.
-    pub fn contains<T: ToNetwork<N>>(&self, network: &T) -> bool {
+    pub fn contains<T: ToNetwork<'a, N>>(&self, network: &T) -> bool {
         self.supernet(&network.to_network()).is_some()
     }
 
     /// Returns the network in `self` which is the supernetwork of `network`.
     ///
     /// Returns None if no network in `self` contains `network`.
-    pub fn supernet<T: ToNetwork<N>>(&self, network: &T) -> Option<N> {
+    pub fn supernet<T: ToNetwork<'a, N>>(&self, network: &T) -> Option<N> {
         self.trie.search(network.to_network())
     }
 
     /// Returns the iterator to `&self`.
-    pub fn iter(&self) -> IpRangeIter<N> {
+    pub fn iter(&'a self) -> IpRangeIter<'a, N> {
         self.into_iter()
     }
 }
 
-impl<'a, N> IntoIterator for &'a IpRange<N>
+impl<'a, N> IntoIterator for &'a IpRange<'a, N>
 where
-    N: IpNet + ToNetwork<N> + Clone,
+    N: IpNet<'a> + ToNetwork<'a, N> + Clone,
 {
     type Item = N;
-    type IntoIter = IpRangeIter<N>;
+    type IntoIter = IpRangeIter<'a, N>;
 
     fn into_iter(self) -> Self::IntoIter {
         let mut queue = VecDeque::new();
         if let Some(root) = self.trie.root.as_ref() {
-            queue.push_back(N::S::init(root.clone()));
+            let state: N::S = root.init_traverse_state();
+            queue.push_back(state);
         }
-        IpRangeIter { queue }
+        IpRangeIter {
+            queue,
+            phantom: PhantomData,
+        }
     }
 }
 
 /// An abstraction for IP networks.
-pub trait IpNet
+pub trait IpNet<'a>
 where
     Self: Sized,
 {
     /// Used for internal traversing.
-    type S: TraverseState<Net = Self>;
-
+    type S: TraverseState<'a, Net = Self>;
     ///`I` is an iterator to the prefix bits of the network.
     type I: Iterator<Item = bool>;
 
@@ -289,7 +290,7 @@ where
 /// Due to limitation of Rust's type system,
 /// this trait is only implemented for some
 /// concrete types.
-pub trait ToNetwork<N: IpNet> {
+pub trait ToNetwork<'a, N: IpNet<'a>> {
     fn to_network(&self) -> N;
 }
 
@@ -298,31 +299,32 @@ pub trait ToNetwork<N: IpNet> {
 /// BFS (Breadth-First-Search) is used for traversing the inner Radix Trie.
 ///
 /// [`IpRange`]: struct.IpRange.html
-pub struct IpRangeIter<N>
+pub struct IpRangeIter<'a, N>
 where
-    N: IpNet,
+    N: IpNet<'a>,
 {
     queue: VecDeque<N::S>,
+    phantom: PhantomData<&'a N>,
 }
 
 /// Used for internal traversing.
 ///
 /// You can simply ignore this trait.
-pub trait TraverseState {
-    type Net: IpNet;
+pub trait TraverseState<'a> {
+    type Net: IpNet<'a>;
 
-    fn node(&self) -> Rc<RefCell<IpTrieNode>>;
+    fn node(&self) -> &'a IpTrieNode;
 
-    fn init(root: Rc<RefCell<IpTrieNode>>) -> Self;
+    fn init(root: &'a IpTrieNode) -> Self;
 
-    fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self;
+    fn transit(&self, next_node: &'a IpTrieNode, current_bit: bool) -> Self;
 
     fn build(&self) -> Self::Net;
 }
 
-impl<N> Iterator for IpRangeIter<N>
+impl<'a, N> Iterator for IpRangeIter<'a, N>
 where
-    N: IpNet,
+    N: IpNet<'a>,
 {
     type Item = N;
 
@@ -331,23 +333,23 @@ where
             // Get the front element of the queue.
             // If it is a leaf, it represents a network
             let node = elem.node();
-            if node.borrow().is_leaf() {
+            if node.is_leaf() {
                 return Some(elem.build());
             }
-            [0, 1].iter().for_each(|&i| {
-                if let Some(child) = node.borrow().children[i as usize].as_ref() {
+            for &i in &[0, 1] {
+                if let Some(child) = node.children[i as usize].as_ref() {
                     // Push the child nodes into the queue
-                    self.queue.push_back(elem.transit(child.clone(), i != 0));
+                    self.queue.push_back(elem.transit(child, i != 0));
                 }
-            });
+            }
         }
         None
     }
 }
 
-impl<N> FromIterator<N> for IpRange<N>
+impl<'a, N> FromIterator<N> for IpRange<'a, N>
 where
-    N: IpNet + ToNetwork<N> + Clone,
+    N: IpNet<'a> + ToNetwork<'a, N> + Clone,
 {
     fn from_iter<T>(iter: T) -> Self
     where
@@ -363,19 +365,19 @@ where
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct IpTrie<N>
+struct IpTrie<'a, N>
 where
-    N: IpNet,
+    N: IpNet<'a>,
 {
-    root: Option<Rc<RefCell<IpTrieNode>>>,
-    phantom_net: PhantomData<N>,
+    root: Option<IpTrieNode>,
+    phantom_net: PhantomData<&'a N>,
 }
 
-impl<N> IpTrie<N>
+impl<'a, N> IpTrie<'a, N>
 where
-    N: IpNet,
+    N: IpNet<'a>,
 {
-    fn new() -> IpTrie<N> {
+    fn new() -> IpTrie<'a, N> {
         IpTrie {
             root: None,
             phantom_net: PhantomData,
@@ -384,55 +386,56 @@ where
 
     fn insert(&mut self, network: N) {
         if self.root.is_none() {
-            self.root = Some(Rc::new(RefCell::new(IpTrieNode::new())))
+            self.root = Some(IpTrieNode::new())
         }
 
-        let mut node = self.root.clone().unwrap(); // The current node
+        let mut node = self.root.as_mut().unwrap() as *mut IpTrieNode; // The current node
 
-        let bits = network.prefix_bits();
-        for bit in bits {
-            let i = bit as usize;
-            let child = node.borrow().children[i].clone();
-            match child {
-                Some(child) => {
-                    if child.borrow().is_leaf() {
-                        // This means the network to be inserted
-                        // is already in the trie.
-                        return;
+        unsafe {
+            let bits = network.prefix_bits();
+            for bit in bits {
+                let i = bit as usize;
+                let child = &mut (*node).children[i];
+                match child {
+                    Some(child) => {
+                        if child.is_leaf() {
+                            // This means the network to be inserted
+                            // is already in the trie.
+                            return;
+                        }
+                        node = &mut **child as *mut IpTrieNode;
                     }
-                    node = child;
-                }
-                None => {
-                    let new_node = Rc::new(RefCell::new(IpTrieNode::new()));
-                    (*node.borrow_mut()).children[i] = Some(new_node.clone());
-                    node = new_node;
+                    None => {
+                        (*node).children[i] = Some(Box::new(IpTrieNode::new()));
+                        node = (*node).children[i].as_mut().unwrap().as_mut() as *mut IpTrieNode;
+                    }
                 }
             }
+            (*node).children = [None, None];
         }
-        (*node.borrow_mut()).children = [None, None];
     }
 
     fn search(&self, network: N) -> Option<N> {
         if self.root.is_none() {
             return None;
         }
-        let mut node = self.root.clone().unwrap();
+        let mut node = self.root.as_ref().unwrap();
 
         let bits = network.prefix_bits();
         for (j, bit) in bits.into_iter().enumerate() {
-            if node.borrow().is_leaf() {
+            if node.is_leaf() {
                 return Some(network.with_new_prefix(j as u8));
             }
 
             let i = bit as usize;
-            let child = node.borrow().children[i].clone();
+            let child = node.children[i].as_ref();
             match child {
                 Some(child) => node = child,
                 None => return None,
             }
         }
 
-        if node.borrow().is_leaf() {
+        if node.is_leaf() {
             Some(network)
         } else {
             None
@@ -454,19 +457,22 @@ where
     }
 
     fn remove(&mut self, network: N) {
-        let root = self.root.clone();
-        if let Some(root) = root.as_ref() {
+        if let Some(root) = self.root.as_mut() {
             let mut bits = network.prefix_bits();
             match bits.next() {
-                Some(next_bit) => root.borrow_mut().remove(bits, next_bit),
-                None => self.root = None, // Reinitialize the trie
+                Some(next_bit) => {
+                    root.remove(bits, next_bit);
+                    return;
+                }
+                None => {}
             }
         }
+        self.root = None // Reinitialize the trie
     }
 
     fn simplify(&mut self) {
-        if let Some(root) = self.root.as_ref() {
-            root.borrow_mut().simplify();
+        if let Some(root) = self.root.as_mut() {
+            root.simplify();
         }
     }
 }
@@ -474,7 +480,7 @@ where
 /// Node of the inner radix trie.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpTrieNode {
-    children: [Option<Rc<RefCell<IpTrieNode>>>; 2],
+    children: [Option<Box<IpTrieNode>>; 2],
 }
 
 impl IpTrieNode {
@@ -482,6 +488,11 @@ impl IpTrieNode {
         IpTrieNode {
             children: [None, None],
         }
+    }
+
+    #[inline]
+    fn init_traverse_state<'a, S: TraverseState<'a>>(&'a self) -> S {
+        S::init(self)
     }
 
     // If both the zero child and the one child of a node are None,
@@ -495,14 +506,15 @@ impl IpTrieNode {
     // If the two children of a node are all leaf node,
     // they can be merged into a new leaf node.
     fn simplify(&mut self) {
-        let leaf_count: u32 = self.children
-            .iter()
+        let leaf_count: u32 = self
+            .children
+            .iter_mut()
             .map(|child| {
                 child
-                    .as_ref()
+                    .as_mut()
                     .map(|child| {
-                        child.borrow_mut().simplify();
-                        child.borrow().is_leaf() as u32
+                        child.simplify();
+                        child.is_leaf() as u32
                     })
                     .unwrap_or_default()
             })
@@ -541,26 +553,30 @@ impl IpTrieNode {
         // to remove, we must split it into two deeper nodes.
         if self.is_leaf() {
             self.children = [
-                Some(Rc::new(RefCell::new(IpTrieNode::new()))),
-                Some(Rc::new(RefCell::new(IpTrieNode::new()))),
+                Some(Box::new(IpTrieNode::new())),
+                Some(Box::new(IpTrieNode::new())),
             ];
         }
 
         match next_bit {
-            Some(next_bit) => if let Some(child) = self.children[i].clone() {
-                // Remove the deeper node recursively
-                child.borrow_mut().remove(bits, next_bit);
-
+            Some(next_bit) => {
+                let is_leaf = if let Some(child) = self.children[i].as_mut() {
+                    // Remove the deeper node recursively
+                    child.remove(bits, next_bit);
+                    child.is_leaf()
+                } else {
+                    false
+                };
                 // In general, a leaf node represents a complete
                 // network. However, the child node cannot be a complete
                 // network after removing a network from it.
                 // This occurring indicates the only child of the
                 // child node is removed, and now this child node
                 // should be marked None.
-                if child.borrow().is_leaf() {
+                if is_leaf {
                     self.children[i] = None;
                 }
-            },
+            }
             None => {
                 // Remove the node that represents the network.
                 self.children[i] = None;
@@ -572,8 +588,8 @@ impl IpTrieNode {
 const MSO_U8: u8 = 1 << 7; // Most significant one for u8
 const MSO_U32: u32 = 1 << 31; // Most significant one for u32
 
-impl IpNet for Ipv4Net {
-    type S = Ipv4TraverseState;
+impl<'a> IpNet<'a> for Ipv4Net {
+    type S = Ipv4TraverseState<'a>;
     type I = Ipv4PrefixBitIterator;
 
     #[inline]
@@ -596,50 +612,50 @@ impl IpNet for Ipv4Net {
     }
 }
 
-impl ToNetwork<Ipv4Net> for Ipv4Net {
+impl<'a> ToNetwork<'a, Ipv4Net> for Ipv4Net {
     #[inline]
     fn to_network(&self) -> Ipv4Net {
         self.trunc()
     }
 }
 
-impl ToNetwork<Ipv4Net> for Ipv4Addr {
+impl<'a> ToNetwork<'a, Ipv4Net> for Ipv4Addr {
     #[inline]
     fn to_network(&self) -> Ipv4Net {
         Ipv4Net::new(*self, 32).unwrap()
     }
 }
 
-impl ToNetwork<Ipv4Net> for u32 {
+impl<'a> ToNetwork<'a, Ipv4Net> for u32 {
     #[inline]
     fn to_network(&self) -> Ipv4Net {
         Ipv4Net::new((*self).into(), 32).unwrap()
     }
 }
 
-impl ToNetwork<Ipv4Net> for [u8; 4] {
+impl<'a> ToNetwork<'a, Ipv4Net> for [u8; 4] {
     #[inline]
     fn to_network(&self) -> Ipv4Net {
         Ipv4Net::new((*self).into(), 32).unwrap()
     }
 }
 
-pub struct Ipv4TraverseState {
-    node: Rc<RefCell<IpTrieNode>>,
+pub struct Ipv4TraverseState<'a> {
+    node: &'a IpTrieNode,
     prefix: u32,
     prefix_len: u8,
 }
 
-impl TraverseState for Ipv4TraverseState {
+impl<'a> TraverseState<'a> for Ipv4TraverseState<'a> {
     type Net = Ipv4Net;
 
     #[inline]
-    fn node(&self) -> Rc<RefCell<IpTrieNode>> {
-        self.node.clone()
+    fn node(&self) -> &'a IpTrieNode {
+        self.node
     }
 
     #[inline]
-    fn init(root: Rc<RefCell<IpTrieNode>>) -> Self {
+    fn init(root: &'a IpTrieNode) -> Self {
         Ipv4TraverseState {
             node: root,
             prefix: 0,
@@ -648,7 +664,7 @@ impl TraverseState for Ipv4TraverseState {
     }
 
     #[inline]
-    fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self {
+    fn transit(&self, next_node: &'a IpTrieNode, current_bit: bool) -> Self {
         let mask = if current_bit {
             MSO_U32 >> self.prefix_len
         } else {
@@ -688,8 +704,8 @@ impl Iterator for Ipv4PrefixBitIterator {
     }
 }
 
-impl IpNet for Ipv6Net {
-    type S = Ipv6TraverseState;
+impl<'a> IpNet<'a> for Ipv6Net {
+    type S = Ipv6TraverseState<'a>;
     type I = Ipv6PrefixBitIterator;
 
     #[inline]
@@ -713,50 +729,50 @@ impl IpNet for Ipv6Net {
     }
 }
 
-impl ToNetwork<Ipv6Net> for Ipv6Net {
+impl<'a> ToNetwork<'a, Ipv6Net> for Ipv6Net {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
         self.trunc()
     }
 }
 
-impl ToNetwork<Ipv6Net> for Ipv6Addr {
+impl<'a> ToNetwork<'a, Ipv6Net> for Ipv6Addr {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
         Ipv6Net::new(*self, 128).unwrap()
     }
 }
 
-impl ToNetwork<Ipv6Net> for [u8; 16] {
+impl<'a> ToNetwork<'a, Ipv6Net> for [u8; 16] {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
         Ipv6Net::new((*self).into(), 128).unwrap()
     }
 }
 
-impl ToNetwork<Ipv6Net> for [u16; 8] {
+impl<'a> ToNetwork<'a, Ipv6Net> for [u16; 8] {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
         Ipv6Net::new((*self).into(), 128).unwrap()
     }
 }
 
-pub struct Ipv6TraverseState {
-    node: Rc<RefCell<IpTrieNode>>,
+pub struct Ipv6TraverseState<'a> {
+    node: &'a IpTrieNode,
     prefix: [u8; 16],
     prefix_len: u8,
 }
 
-impl TraverseState for Ipv6TraverseState {
+impl<'a> TraverseState<'a> for Ipv6TraverseState<'a> {
     type Net = Ipv6Net;
 
     #[inline]
-    fn node(&self) -> Rc<RefCell<IpTrieNode>> {
-        self.node.clone()
+    fn node(&self) -> &'a IpTrieNode {
+        self.node
     }
 
     #[inline]
-    fn init(root: Rc<RefCell<IpTrieNode>>) -> Self {
+    fn init(root: &'a IpTrieNode) -> Self {
         Ipv6TraverseState {
             node: root,
             prefix: [0; 16],
@@ -765,7 +781,7 @@ impl TraverseState for Ipv6TraverseState {
     }
 
     #[inline]
-    fn transit(&self, next_node: Rc<RefCell<IpTrieNode>>, current_bit: bool) -> Self {
+    fn transit(&self, next_node: &'a IpTrieNode, current_bit: bool) -> Self {
         let i = self.prefix_len / 8;
         let mask = if current_bit {
             MSO_U8 >> (self.prefix_len % 8)
@@ -812,7 +828,6 @@ impl Iterator for Ipv6PrefixBitIterator {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -827,7 +842,7 @@ mod tests {
         assert!("192.168.5.130/0.0.0.256".parse::<Ipv4Net>().is_err());
     }
 
-    impl IpRange<Ipv4Net> {
+    impl<'a> IpRange<'a, Ipv4Net> {
         fn get_network(&self, prefix_size: usize, prefix: &str) -> Option<Ipv4Net> {
             self.trie
                 .search(format!("{}/{}", prefix, prefix_size).parse().unwrap())
@@ -864,7 +879,6 @@ mod tests {
         assert_eq!(Some(network4), ip_range.get_network(32, "254.254.254.254"));
     }
 
-
     #[test]
     fn simplify() {
         let mut ip_range = IpRange::new();
@@ -884,7 +898,6 @@ mod tests {
             ip_range.get_network(19, "192.168.0.0")
         );
     }
-
 
     #[test]
     fn add_multiple_networks_joint1() {
@@ -1017,8 +1030,7 @@ mod tests {
         );
     }
 
-
-    impl IpRange<Ipv4Net> {
+    impl<'a> IpRange<'a, Ipv4Net> {
         fn contains_ip(&self, ip: &str) -> bool {
             self.contains(&ip.parse::<Ipv4Addr>().unwrap())
         }
@@ -1440,7 +1452,8 @@ mod tests {
             .add("192.168.21.0/24".parse().unwrap())
             .add("192.168.22.0/24".parse().unwrap());
 
-        let ip_range = ip_range1.merge(&ip_range2).merge(&ip_range3);
+        let ip_range = ip_range1.merge(&ip_range2);
+        let ip_range = ip_range.merge(&ip_range3);
         assert_eq!(ip_range.into_iter().count(), 1);
         assert_eq!(
             "192.168.0.0/19".parse().ok(),
