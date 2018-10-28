@@ -585,7 +585,7 @@ impl IpTrieNode {
     }
 }
 
-const MSO_U8: u8 = 1 << 7; // Most significant one for u8
+const MSO_U128: u128 = 1 << 127; // Most significant one for u128
 const MSO_U32: u32 = 1 << 31; // Most significant one for u32
 
 impl<'a> IpNet<'a> for Ipv4Net {
@@ -710,11 +710,9 @@ impl<'a> IpNet<'a> for Ipv6Net {
 
     #[inline]
     fn prefix_bits(&self) -> Self::I {
-        let prefix = self.addr().octets();
         Ipv6PrefixBitIterator {
-            prefix,
+            prefix: self.addr().into(),
             prefix_len: self.prefix_len(),
-            index: 0,
         }
     }
 
@@ -743,6 +741,13 @@ impl<'a> ToNetwork<'a, Ipv6Net> for Ipv6Addr {
     }
 }
 
+impl<'a> ToNetwork<'a, Ipv6Net> for u128 {
+    #[inline]
+    fn to_network(&self) -> Ipv6Net {
+        Ipv6Net::new((*self).into(), 128).unwrap()
+    }
+}
+
 impl<'a> ToNetwork<'a, Ipv6Net> for [u8; 16] {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
@@ -759,7 +764,7 @@ impl<'a> ToNetwork<'a, Ipv6Net> for [u16; 8] {
 
 pub struct Ipv6TraverseState<'a> {
     node: &'a IpTrieNode,
-    prefix: [u8; 16],
+    prefix: u128,
     prefix_len: u8,
 }
 
@@ -775,26 +780,21 @@ impl<'a> TraverseState<'a> for Ipv6TraverseState<'a> {
     fn init(root: &'a IpTrieNode) -> Self {
         Ipv6TraverseState {
             node: root,
-            prefix: [0; 16],
+            prefix: 0,
             prefix_len: 0,
         }
     }
 
     #[inline]
     fn transit(&self, next_node: &'a IpTrieNode, current_bit: bool) -> Self {
-        let i = self.prefix_len / 8;
         let mask = if current_bit {
-            MSO_U8 >> (self.prefix_len % 8)
+            MSO_U128 >> self.prefix_len
         } else {
             0
         };
-
-        let mut prefix = self.prefix;
-        prefix[i as usize] |= mask;
-
         Ipv6TraverseState {
             node: next_node,
-            prefix,
+            prefix: self.prefix | mask,
             prefix_len: self.prefix_len + 1,
         }
     }
@@ -806,9 +806,8 @@ impl<'a> TraverseState<'a> for Ipv6TraverseState<'a> {
 }
 
 pub struct Ipv6PrefixBitIterator {
-    prefix: [u8; 16],
+    prefix: u128,
     prefix_len: u8,
-    index: u8,
 }
 
 impl Iterator for Ipv6PrefixBitIterator {
@@ -816,12 +815,11 @@ impl Iterator for Ipv6PrefixBitIterator {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.prefix_len {
-            let i = self.index / 8;
-            let mask = MSO_U8 >> (self.index % 8);
-
-            self.index += 1;
-            Some(self.prefix[i as usize] & mask != 0)
+        if self.prefix_len > 0 {
+            let prefix = self.prefix;
+            self.prefix <<= 1;
+            self.prefix_len -= 1;
+            Some(prefix & MSO_U128 != 0)
         } else {
             None
         }

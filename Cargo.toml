@@ -13,7 +13,7 @@ license = "MIT"
 travis-ci = { repository = "sticnarf/iprange-rs" }
 
 [dependencies]
-ipnet = "1.0.0"
+ipnet = "2.0.0"
 
 [dev-dependencies]
 rand = "0.3.17"
