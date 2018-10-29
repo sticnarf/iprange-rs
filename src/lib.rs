@@ -245,6 +245,15 @@ where
     }
 }
 
+impl<N> Default for IpRange<N>
+where
+    N: IpNet + ToNetwork<N> + Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<N> IntoIterator for &IpRange<N>
 where
     N: IpNet + ToNetwork<N> + Clone,
@@ -263,7 +272,7 @@ where
 }
 
 /// An abstraction for IP networks.
-pub trait IpNet
+pub trait IpNet: Copy
 where
     Self: Sized,
 {
@@ -360,7 +369,7 @@ where
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 struct IpTrie<N>
 where
     N: IpNet,
@@ -412,13 +421,10 @@ where
     }
 
     fn search(&self, network: N) -> Option<N> {
-        if self.root.is_none() {
-            return None;
-        }
-        let mut node = self.root.as_ref().unwrap();
+        let mut node = self.root.as_ref()?;
 
         let bits = network.prefix_bits();
-        for (j, bit) in bits.into_iter().enumerate() {
+        for (j, bit) in bits.enumerate() {
             if node.is_leaf() {
                 return Some(network.with_new_prefix(j as u8));
             }
@@ -455,12 +461,9 @@ where
     fn remove(&mut self, network: N) {
         if let Some(root) = self.root.as_mut() {
             let mut bits = network.prefix_bits();
-            match bits.next() {
-                Some(next_bit) => {
-                    root.remove(bits, next_bit);
-                    return;
-                }
-                None => {}
+            if let Some(next_bit) = bits.next() {
+                root.remove(bits, next_bit);
+                return;
             }
         }
         self.root = None // Reinitialize the trie

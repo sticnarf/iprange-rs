@@ -5,14 +5,14 @@ extern crate iprange;
 extern crate rand;
 extern crate test;
 
-use test::Bencher;
-use iprange::*;
 use ipnet::{Ipv4Net, Ipv6Net};
-use std::net::{Ipv4Addr, Ipv6Addr};
-use std::fs::File;
-use std::path::PathBuf;
-use std::io::{BufRead, BufReader};
+use iprange::*;
 use rand::{Rng, SeedableRng, StdRng};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::path::PathBuf;
+use test::Bencher;
 
 #[bench]
 fn parse_one_ipv4_addr(b: &mut Bencher) {
@@ -33,7 +33,6 @@ fn parse_one_ipv6_addr(b: &mut Bencher) {
 fn parse_one_ipv6_net(b: &mut Bencher) {
     b.iter(|| "2400:9dc0::/32".parse::<Ipv6Net>().unwrap());
 }
-
 
 fn read_lines_from_file(file_name: &str) -> Vec<String> {
     let path = PathBuf::from(file!());
@@ -69,8 +68,10 @@ fn rand_ipv6_list(n: usize) -> Vec<Ipv6Addr> {
 #[bench]
 fn parse_chnlists_v4(b: &mut Bencher) {
     let lines = chnlists_v4();
-    b.iter(|| for line in &lines {
-        line.parse::<Ipv4Net>().ok();
+    b.iter(|| {
+        for line in &lines {
+            line.parse::<Ipv4Net>().ok();
+        }
     });
 }
 
@@ -92,16 +93,20 @@ fn test_10000_ips_in_chnlists_v4(b: &mut Bencher) {
         .iter()
         .flat_map(|l| l.parse::<Ipv4Net>())
         .collect::<IpRange<Ipv4Net>>();
-    b.iter(|| for ip in &ip_list {
-        chnlists.contains(ip);
+    b.iter(|| {
+        for ip in &ip_list {
+            chnlists.contains(ip);
+        }
     });
 }
 
 #[bench]
 fn parse_chnlists_v6(b: &mut Bencher) {
     let lines = chnlists_v6();
-    b.iter(|| for line in &lines {
-        line.parse::<Ipv6Net>().ok();
+    b.iter(|| {
+        for line in &lines {
+            line.parse::<Ipv6Net>().ok();
+        }
     });
 }
 
@@ -123,8 +128,10 @@ fn test_10000_ips_in_chnlists_v6(b: &mut Bencher) {
         .iter()
         .flat_map(|l| l.parse::<Ipv6Net>())
         .collect::<IpRange<Ipv6Net>>();
-    b.iter(|| for ip in &ip_list {
-        chnlists.contains(ip);
+    b.iter(|| {
+        for ip in &ip_list {
+            chnlists.contains(ip);
+        }
     });
 }
 
