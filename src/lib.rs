@@ -86,19 +86,13 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// [`intersect`]: struct.IpRange.html#method.intersect
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpRange<N>
-where
-    N: IpNet + ToNetwork<N> + Clone,
-{
+pub struct IpRange<N: IpNet> {
     // IpRange uses a radix trie to store networks
     trie: IpTrie<N>,
     phantom_net: PhantomData<N>,
 }
 
-impl<N> IpRange<N>
-where
-    N: IpNet + ToNetwork<N> + Clone,
-{
+impl<N: IpNet> IpRange<N> {
     /// Creates an empty `IpRange`.
     pub fn new() -> IpRange<N> {
         IpRange {
@@ -272,7 +266,7 @@ where
 }
 
 /// An abstraction for IP networks.
-pub trait IpNet: Copy
+pub trait IpNet: ToNetwork<Self> + Copy
 where
     Self: Sized,
 {
