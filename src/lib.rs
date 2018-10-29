@@ -86,21 +86,21 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// [`intersect`]: struct.IpRange.html#method.intersect
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IpRange<'a, N: 'a>
+pub struct IpRange<N>
 where
-    N: IpNet<'a> + ToNetwork<'a, N> + Clone,
+    N: IpNet + ToNetwork<N> + Clone,
 {
     // IpRange uses a radix trie to store networks
-    trie: IpTrie<'a, N>,
+    trie: IpTrie<N>,
     phantom_net: PhantomData<N>,
 }
 
-impl<'a, N> IpRange<'a, N>
+impl<N> IpRange<N>
 where
-    N: IpNet<'a> + ToNetwork<'a, N> + Clone,
+    N: IpNet + ToNetwork<N> + Clone,
 {
     /// Creates an empty `IpRange`.
-    pub fn new() -> IpRange<'a, N> {
+    pub fn new() -> IpRange<N> {
         IpRange {
             trie: IpTrie::new(),
             phantom_net: PhantomData,
@@ -198,7 +198,7 @@ where
     /// that is either in `self` or in `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn merge(&'a self, other: &'a IpRange<'a, N>) -> Self {
+    pub fn merge(&self, other: &IpRange<N>) -> Self {
         self.into_iter().chain(other.into_iter()).collect()
     }
 
@@ -206,7 +206,7 @@ where
     /// that is in both `self` and `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn intersect(&'a self, other: &'a IpRange<'a, N>) -> Self {
+    pub fn intersect(&self, other: &IpRange<N>) -> Self {
         let range1 = self.into_iter().filter(|network| other.contains(network));
         let range2 = other.into_iter().filter(|network| self.contains(network));
         range1.chain(range2).collect()
@@ -216,7 +216,7 @@ where
     /// that is in `self` while not in `other`.
     ///
     /// The returned `IpRange` is simplified.
-    pub fn exclude(&'a self, other: &'a IpRange<'a, N>) -> IpRange<'a, N> {
+    pub fn exclude(&self, other: &IpRange<N>) -> IpRange<N> {
         let mut new = (*self).clone();
         for network in other {
             new.remove(network);
@@ -228,29 +228,29 @@ where
     ///
     /// `network` is anything that can be converted into `N`.
     /// See `ToNetwork<N>` for detail.
-    pub fn contains<T: ToNetwork<'a, N>>(&self, network: &T) -> bool {
+    pub fn contains<T: ToNetwork<N>>(&self, network: &T) -> bool {
         self.supernet(&network.to_network()).is_some()
     }
 
     /// Returns the network in `self` which is the supernetwork of `network`.
     ///
     /// Returns None if no network in `self` contains `network`.
-    pub fn supernet<T: ToNetwork<'a, N>>(&self, network: &T) -> Option<N> {
+    pub fn supernet<T: ToNetwork<N>>(&self, network: &T) -> Option<N> {
         self.trie.search(network.to_network())
     }
 
     /// Returns the iterator to `&self`.
-    pub fn iter(&'a self) -> IpRangeIter<'a, N> {
+    pub fn iter(&self) -> IpRangeIter<N> {
         self.into_iter()
     }
 }
 
-impl<'a, N> IntoIterator for &'a IpRange<'a, N>
+impl<N> IntoIterator for &IpRange<N>
 where
-    N: IpNet<'a> + ToNetwork<'a, N> + Clone,
+    N: IpNet + ToNetwork<N> + Clone,
 {
     type Item = N;
-    type IntoIter = IpRangeIter<'a, N>;
+    type IntoIter = IpRangeIter<N>;
 
     fn into_iter(self) -> Self::IntoIter {
         let mut queue = VecDeque::new();
@@ -258,20 +258,17 @@ where
             let state: N::S = root.init_traverse_state();
             queue.push_back(state);
         }
-        IpRangeIter {
-            queue,
-            phantom: PhantomData,
-        }
+        IpRangeIter { queue }
     }
 }
 
 /// An abstraction for IP networks.
-pub trait IpNet<'a>
+pub trait IpNet
 where
     Self: Sized,
 {
     /// Used for internal traversing.
-    type S: TraverseState<'a, Net = Self>;
+    type S: TraverseState<Net = Self>;
     ///`I` is an iterator to the prefix bits of the network.
     type I: Iterator<Item = bool>;
 
@@ -290,7 +287,7 @@ where
 /// Due to limitation of Rust's type system,
 /// this trait is only implemented for some
 /// concrete types.
-pub trait ToNetwork<'a, N: IpNet<'a>> {
+pub trait ToNetwork<N: IpNet> {
     fn to_network(&self) -> N;
 }
 
@@ -299,32 +296,31 @@ pub trait ToNetwork<'a, N: IpNet<'a>> {
 /// BFS (Breadth-First-Search) is used for traversing the inner Radix Trie.
 ///
 /// [`IpRange`]: struct.IpRange.html
-pub struct IpRangeIter<'a, N: 'a>
+pub struct IpRangeIter<N>
 where
-    N: IpNet<'a>,
+    N: IpNet,
 {
     queue: VecDeque<N::S>,
-    phantom: PhantomData<&'a N>,
 }
 
 /// Used for internal traversing.
 ///
 /// You can simply ignore this trait.
-pub trait TraverseState<'a> {
-    type Net: IpNet<'a>;
+pub trait TraverseState {
+    type Net: IpNet;
 
-    fn node(&self) -> &'a IpTrieNode;
+    fn node(&self) -> &IpTrieNode;
 
-    fn init(root: &'a IpTrieNode) -> Self;
+    fn init(root: &IpTrieNode) -> Self;
 
-    fn transit(&self, next_node: &'a IpTrieNode, current_bit: bool) -> Self;
+    fn transit(&self, next_node: &IpTrieNode, current_bit: bool) -> Self;
 
     fn build(&self) -> Self::Net;
 }
 
-impl<'a, N> Iterator for IpRangeIter<'a, N>
+impl<N> Iterator for IpRangeIter<N>
 where
-    N: IpNet<'a>,
+    N: IpNet,
 {
     type Item = N;
 
@@ -347,9 +343,9 @@ where
     }
 }
 
-impl<'a, N> FromIterator<N> for IpRange<'a, N>
+impl<N> FromIterator<N> for IpRange<N>
 where
-    N: IpNet<'a> + ToNetwork<'a, N> + Clone,
+    N: IpNet + ToNetwork<N> + Clone,
 {
     fn from_iter<T>(iter: T) -> Self
     where
@@ -365,19 +361,19 @@ where
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct IpTrie<'a, N: 'a>
+struct IpTrie<N>
 where
-    N: IpNet<'a>,
+    N: IpNet,
 {
     root: Option<IpTrieNode>,
-    phantom_net: PhantomData<&'a N>,
+    phantom_net: PhantomData<N>,
 }
 
-impl<'a, N> IpTrie<'a, N>
+impl<N> IpTrie<N>
 where
-    N: IpNet<'a>,
+    N: IpNet,
 {
-    fn new() -> IpTrie<'a, N> {
+    fn new() -> IpTrie<N> {
         IpTrie {
             root: None,
             phantom_net: PhantomData,
@@ -491,7 +487,7 @@ impl IpTrieNode {
     }
 
     #[inline]
-    fn init_traverse_state<'a, S: TraverseState<'a>>(&'a self) -> S {
+    fn init_traverse_state<S: TraverseState>(&self) -> S {
         S::init(self)
     }
 
@@ -588,8 +584,8 @@ impl IpTrieNode {
 const MSO_U128: u128 = 1 << 127; // Most significant one for u128
 const MSO_U32: u32 = 1 << 31; // Most significant one for u32
 
-impl<'a> IpNet<'a> for Ipv4Net {
-    type S = Ipv4TraverseState<'a>;
+impl IpNet for Ipv4Net {
+    type S = Ipv4TraverseState;
     type I = Ipv4PrefixBitIterator;
 
     #[inline]
@@ -612,50 +608,50 @@ impl<'a> IpNet<'a> for Ipv4Net {
     }
 }
 
-impl<'a> ToNetwork<'a, Ipv4Net> for Ipv4Net {
+impl ToNetwork<Ipv4Net> for Ipv4Net {
     #[inline]
     fn to_network(&self) -> Ipv4Net {
         self.trunc()
     }
 }
 
-impl<'a> ToNetwork<'a, Ipv4Net> for Ipv4Addr {
+impl ToNetwork<Ipv4Net> for Ipv4Addr {
     #[inline]
     fn to_network(&self) -> Ipv4Net {
         Ipv4Net::new(*self, 32).unwrap()
     }
 }
 
-impl<'a> ToNetwork<'a, Ipv4Net> for u32 {
+impl ToNetwork<Ipv4Net> for u32 {
     #[inline]
     fn to_network(&self) -> Ipv4Net {
         Ipv4Net::new((*self).into(), 32).unwrap()
     }
 }
 
-impl<'a> ToNetwork<'a, Ipv4Net> for [u8; 4] {
+impl ToNetwork<Ipv4Net> for [u8; 4] {
     #[inline]
     fn to_network(&self) -> Ipv4Net {
         Ipv4Net::new((*self).into(), 32).unwrap()
     }
 }
 
-pub struct Ipv4TraverseState<'a> {
-    node: &'a IpTrieNode,
+pub struct Ipv4TraverseState {
+    node: *const IpTrieNode,
     prefix: u32,
     prefix_len: u8,
 }
 
-impl<'a> TraverseState<'a> for Ipv4TraverseState<'a> {
+impl TraverseState for Ipv4TraverseState {
     type Net = Ipv4Net;
 
     #[inline]
-    fn node(&self) -> &'a IpTrieNode {
-        self.node
+    fn node(&self) -> &IpTrieNode {
+        unsafe { &*self.node }
     }
 
     #[inline]
-    fn init(root: &'a IpTrieNode) -> Self {
+    fn init(root: &IpTrieNode) -> Self {
         Ipv4TraverseState {
             node: root,
             prefix: 0,
@@ -664,7 +660,7 @@ impl<'a> TraverseState<'a> for Ipv4TraverseState<'a> {
     }
 
     #[inline]
-    fn transit(&self, next_node: &'a IpTrieNode, current_bit: bool) -> Self {
+    fn transit(&self, next_node: &IpTrieNode, current_bit: bool) -> Self {
         let mask = if current_bit {
             MSO_U32 >> self.prefix_len
         } else {
@@ -704,8 +700,8 @@ impl Iterator for Ipv4PrefixBitIterator {
     }
 }
 
-impl<'a> IpNet<'a> for Ipv6Net {
-    type S = Ipv6TraverseState<'a>;
+impl IpNet for Ipv6Net {
+    type S = Ipv6TraverseState;
     type I = Ipv6PrefixBitIterator;
 
     #[inline]
@@ -727,57 +723,57 @@ impl<'a> IpNet<'a> for Ipv6Net {
     }
 }
 
-impl<'a> ToNetwork<'a, Ipv6Net> for Ipv6Net {
+impl ToNetwork<Ipv6Net> for Ipv6Net {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
         self.trunc()
     }
 }
 
-impl<'a> ToNetwork<'a, Ipv6Net> for Ipv6Addr {
+impl ToNetwork<Ipv6Net> for Ipv6Addr {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
         Ipv6Net::new(*self, 128).unwrap()
     }
 }
 
-impl<'a> ToNetwork<'a, Ipv6Net> for u128 {
+impl ToNetwork<Ipv6Net> for u128 {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
         Ipv6Net::new((*self).into(), 128).unwrap()
     }
 }
 
-impl<'a> ToNetwork<'a, Ipv6Net> for [u8; 16] {
+impl ToNetwork<Ipv6Net> for [u8; 16] {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
         Ipv6Net::new((*self).into(), 128).unwrap()
     }
 }
 
-impl<'a> ToNetwork<'a, Ipv6Net> for [u16; 8] {
+impl ToNetwork<Ipv6Net> for [u16; 8] {
     #[inline]
     fn to_network(&self) -> Ipv6Net {
         Ipv6Net::new((*self).into(), 128).unwrap()
     }
 }
 
-pub struct Ipv6TraverseState<'a> {
-    node: &'a IpTrieNode,
+pub struct Ipv6TraverseState {
+    node: *const IpTrieNode,
     prefix: u128,
     prefix_len: u8,
 }
 
-impl<'a> TraverseState<'a> for Ipv6TraverseState<'a> {
+impl TraverseState for Ipv6TraverseState {
     type Net = Ipv6Net;
 
     #[inline]
-    fn node(&self) -> &'a IpTrieNode {
-        self.node
+    fn node(&self) -> &IpTrieNode {
+        unsafe { &*self.node }
     }
 
     #[inline]
-    fn init(root: &'a IpTrieNode) -> Self {
+    fn init(root: &IpTrieNode) -> Self {
         Ipv6TraverseState {
             node: root,
             prefix: 0,
@@ -786,7 +782,7 @@ impl<'a> TraverseState<'a> for Ipv6TraverseState<'a> {
     }
 
     #[inline]
-    fn transit(&self, next_node: &'a IpTrieNode, current_bit: bool) -> Self {
+    fn transit(&self, next_node: &IpTrieNode, current_bit: bool) -> Self {
         let mask = if current_bit {
             MSO_U128 >> self.prefix_len
         } else {
@@ -840,7 +836,7 @@ mod tests {
         assert!("192.168.5.130/0.0.0.256".parse::<Ipv4Net>().is_err());
     }
 
-    impl<'a> IpRange<'a, Ipv4Net> {
+    impl IpRange<Ipv4Net> {
         fn get_network(&self, prefix_size: usize, prefix: &str) -> Option<Ipv4Net> {
             self.trie
                 .search(format!("{}/{}", prefix, prefix_size).parse().unwrap())
@@ -1028,7 +1024,7 @@ mod tests {
         );
     }
 
-    impl<'a> IpRange<'a, Ipv4Net> {
+    impl IpRange<Ipv4Net> {
         fn contains_ip(&self, ip: &str) -> bool {
             self.contains(&ip.parse::<Ipv4Addr>().unwrap())
         }
