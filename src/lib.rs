@@ -254,7 +254,7 @@ where
     }
 }
 
-impl<N> IntoIterator for &IpRange<N>
+impl<'a, N> IntoIterator for &'a IpRange<N>
 where
     N: IpNet + ToNetwork<N> + Clone,
 {
@@ -514,10 +514,8 @@ impl IpTrieNode {
                     .map(|child| {
                         child.simplify();
                         child.is_leaf() as u32
-                    })
-                    .unwrap_or_default()
-            })
-            .sum();
+                    }).unwrap_or_default()
+            }).sum();
         if leaf_count == 2 {
             self.children = [None, None];
         }
