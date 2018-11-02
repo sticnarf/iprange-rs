@@ -44,6 +44,7 @@ extern crate ipnet;
 
 use ipnet::{Ipv4Net, Ipv6Net};
 use std::collections::VecDeque;
+use std::fmt;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -85,7 +86,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// [`merge`]: struct.IpRange.html#method.merge
 /// [`intersect`]: struct.IpRange.html#method.intersect
 /// [`exclude`]: struct.IpRange.html#method.exclude
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct IpRange<N: IpNet> {
     // IpRange uses a radix trie to store networks
     trie: IpTrie<N>,
@@ -248,6 +249,20 @@ where
     }
 }
 
+impl<N: IpNet> fmt::Debug for IpRange<N> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        let mut networks: Vec<_> = self
+            .iter()
+            .take(4)
+            .map(|net| format!("{:?}", net))
+            .collect();
+        if networks.len() == 4 {
+            networks[3] = "...".to_string();
+        }
+        write!(f, "IpRange [{}]", networks.join(", "))
+    }
+}
+
 impl<'a, N> IntoIterator for &'a IpRange<N>
 where
     N: IpNet + ToNetwork<N> + Clone,
@@ -266,7 +281,7 @@ where
 }
 
 /// An abstraction for IP networks.
-pub trait IpNet: ToNetwork<Self> + Copy
+pub trait IpNet: ToNetwork<Self> + fmt::Debug + Ord + Copy
 where
     Self: Sized,
 {
@@ -1646,5 +1661,52 @@ mod tests {
         data.sort_unstable();
         nets.sort_unstable();
         assert_eq!(nets, data);
+    }
+
+    #[test]
+    fn debug_fmt() {
+        let ip_range: IpRange<Ipv4Net> = IpRange::default();
+        assert_eq!(format!("{:?}", ip_range), "IpRange []");
+
+        let ip_range: IpRange<Ipv4Net> = ["1.0.1.0/24", "1.0.2.0/23", "1.0.8.0/21"]
+            .iter()
+            .map(|net| net.parse().unwrap())
+            .collect();
+        assert_eq!(
+            format!("{:?}", ip_range),
+            "IpRange [1.0.8.0/21, 1.0.2.0/23, 1.0.1.0/24]"
+        );
+
+        let ip_range: IpRange<Ipv4Net> = [
+            "192.168.0.0/16",
+            "1.0.2.0/23",
+            "1.0.8.0/21",
+            "127.0.0.0/8",
+            "172.16.0.0/12",
+        ]
+            .iter()
+            .map(|net| net.parse().unwrap())
+            .collect();
+        assert_eq!(
+            format!("{:?}", ip_range),
+            "IpRange [127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, ...]"
+        );
+
+        let ip_range: IpRange<Ipv6Net> = [
+            "2001:4438::/32",
+            "2001:4510::/29",
+            "2400:1040::/32",
+            "2400:12c0::/32",
+            "2400:1340::/32",
+            "2400:1380::/32",
+            "2400:15c0::/32",
+        ]
+            .iter()
+            .map(|net| net.parse().unwrap())
+            .collect();
+        assert_eq!(
+            format!("{:?}", ip_range),
+            "IpRange [2001:4510::/29, 2001:4438::/32, 2400:1040::/32, ...]"
+        );
     }
 }
