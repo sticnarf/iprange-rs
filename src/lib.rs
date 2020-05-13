@@ -342,6 +342,7 @@ where
 /// Used for internal traversing.
 ///
 /// You can simply ignore this trait.
+#[doc(hidden)]
 pub trait TraverseState {
     type Net: IpNet;
 
@@ -670,6 +671,7 @@ impl ToNetwork<Ipv4Net> for [u8; 4] {
     }
 }
 
+#[doc(hidden)]
 pub struct Ipv4TraverseState {
     node: *const IpTrieNode,
     prefix: u32,
@@ -713,6 +715,7 @@ impl TraverseState for Ipv4TraverseState {
     }
 }
 
+#[doc(hidden)]
 pub struct Ipv4PrefixBitIterator {
     prefix: u32,
     prefix_len: u8,
@@ -792,6 +795,7 @@ impl ToNetwork<Ipv6Net> for [u16; 8] {
     }
 }
 
+#[doc(hidden)]
 pub struct Ipv6TraverseState {
     node: *const IpTrieNode,
     prefix: u128,
@@ -835,6 +839,7 @@ impl TraverseState for Ipv6TraverseState {
     }
 }
 
+#[doc(hidden)]
 pub struct Ipv6PrefixBitIterator {
     prefix: u128,
     prefix_len: u8,
