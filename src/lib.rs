@@ -162,6 +162,24 @@ impl<N: IpNet> IpRange<N> {
         self
     }
 
+    /// Returns `true` if the `self` has no network.
+    ///
+    /// # Examples
+    /// ```
+    /// # extern crate ipnet;
+    /// #
+    /// # use iprange::IpRange;
+    /// # use ipnet::Ipv4Net;
+    /// let mut ip_range = IpRange::new();
+    /// let network: Ipv4Net = "1.0.1.0/24".parse().unwrap();
+    /// ip_range.add(network.clone());
+    /// ip_range.remove(network);
+    /// assert!(ip_range.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.trie.root.is_none()
+    }
+
     /// Simplify `self` by combining networks. For example:
     ///
     /// ```
