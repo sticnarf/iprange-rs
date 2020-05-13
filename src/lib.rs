@@ -472,7 +472,11 @@ where
             let mut bits = network.prefix_bits();
             if let Some(next_bit) = bits.next() {
                 root.remove(bits, next_bit);
-                return;
+                // If root becomes a leaf after removing the network,
+                // we should simply reinitialize the trie.
+                if !root.is_leaf() {
+                    return;
+                }
             }
         }
         self.root = None // Reinitialize the trie
@@ -523,8 +527,10 @@ impl IpTrieNode {
                     .map(|child| {
                         child.simplify();
                         child.is_leaf() as u32
-                    }).unwrap_or_default()
-            }).sum();
+                    })
+                    .unwrap_or_default()
+            })
+            .sum();
         if leaf_count == 2 {
             self.children = [None, None];
         }
@@ -1684,9 +1690,9 @@ mod tests {
             "127.0.0.0/8",
             "172.16.0.0/12",
         ]
-            .iter()
-            .map(|net| net.parse().unwrap())
-            .collect();
+        .iter()
+        .map(|net| net.parse().unwrap())
+        .collect();
         assert_eq!(
             format!("{:?}", ip_range),
             "IpRange [127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, ...]"
@@ -1701,12 +1707,21 @@ mod tests {
             "2400:1380::/32",
             "2400:15c0::/32",
         ]
-            .iter()
-            .map(|net| net.parse().unwrap())
-            .collect();
+        .iter()
+        .map(|net| net.parse().unwrap())
+        .collect();
         assert_eq!(
             format!("{:?}", ip_range),
             "IpRange [2001:4510::/29, 2001:4438::/32, 2400:1040::/32, ...]"
         );
+    }
+
+    #[test]
+    fn remove_all() {
+        let mut ip_range = IpRange::new();
+        let network: Ipv4Net = "1.0.1.0/24".parse().unwrap();
+        ip_range.add(network.clone());
+        ip_range.remove(network);
+        assert!(ip_range.iter().next().is_none());
     }
 }
