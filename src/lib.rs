@@ -286,7 +286,7 @@ where
     N: IpNet + ToNetwork<N> + Clone,
 {
     type Item = N;
-    type IntoIter = IpRangeIter<N>;
+    type IntoIter = IpRangeIter<'a, N>;
 
     fn into_iter(self) -> Self::IntoIter {
         let mut queue = VecDeque::new();
@@ -294,7 +294,10 @@ where
             let state: N::S = root.init_traverse_state();
             queue.push_back(state);
         }
-        IpRangeIter { queue }
+        IpRangeIter {
+            queue,
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -332,11 +335,12 @@ pub trait ToNetwork<N: IpNet> {
 /// BFS (Breadth-First-Search) is used for traversing the inner Radix Trie.
 ///
 /// [`IpRange`]: struct.IpRange.html
-pub struct IpRangeIter<N>
+pub struct IpRangeIter<'a, N>
 where
     N: IpNet,
 {
     queue: VecDeque<N::S>,
+    _phantom: PhantomData<&'a N>,
 }
 
 /// Used for internal traversing.
@@ -346,7 +350,7 @@ where
 pub trait TraverseState {
     type Net: IpNet;
 
-    fn node(&self) -> &IpTrieNode;
+    fn node(&self) -> *const IpTrieNode;
 
     fn init(root: &IpTrieNode) -> Self;
 
@@ -355,7 +359,7 @@ pub trait TraverseState {
     fn build(&self) -> Self::Net;
 }
 
-impl<N> Iterator for IpRangeIter<N>
+impl<'a, N> Iterator for IpRangeIter<'a, N>
 where
     N: IpNet,
 {
@@ -364,8 +368,10 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(elem) = self.queue.pop_front() {
             // Get the front element of the queue.
-            // If it is a leaf, it represents a network
-            let node = elem.node();
+            // If it is a leaf, it represents a network.
+            // SAFETY: IpRangeIter has an PhantomData<'a N> so the IpNet must
+            // exist when this iterator exists.
+            let node = unsafe { &*elem.node() };
             if node.is_leaf() {
                 return Some(elem.build());
             }
@@ -682,8 +688,8 @@ impl TraverseState for Ipv4TraverseState {
     type Net = Ipv4Net;
 
     #[inline]
-    fn node(&self) -> &IpTrieNode {
-        unsafe { &*self.node }
+    fn node(&self) -> *const IpTrieNode {
+        self.node
     }
 
     #[inline]
@@ -806,8 +812,8 @@ impl TraverseState for Ipv6TraverseState {
     type Net = Ipv6Net;
 
     #[inline]
-    fn node(&self) -> &IpTrieNode {
-        unsafe { &*self.node }
+    fn node(&self) -> *const IpTrieNode {
+        self.node
     }
 
     #[inline]
