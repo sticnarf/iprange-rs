@@ -424,11 +424,16 @@ where
     }
 
     fn insert(&mut self, network: N) {
-        if self.root.is_none() {
-            self.root = Some(IpTrieNode::new())
-        }
-
-        let mut node = self.root.as_mut().unwrap() as *mut IpTrieNode; // The current node
+        // The current node
+        let mut node = if let Some(root) = &mut self.root {
+            if root.is_leaf() {
+                // Insert into all-zero network has no effect.
+                return;
+            }
+            root as *mut IpTrieNode
+        } else {
+            self.root.insert(IpTrieNode::new()) as *mut IpTrieNode
+        };
 
         unsafe {
             let bits = network.prefix_bits();
@@ -1752,5 +1757,13 @@ mod tests {
         ip_range.add(network.clone());
         ip_range.remove(network);
         assert!(ip_range.iter().next().is_none());
+    }
+
+    #[test]
+    fn add_to_all_zeros() {
+        let mut ip_range: IpRange<Ipv4Net> = IpRange::new();
+        ip_range.add("0.0.0.0/0".parse().unwrap());
+        ip_range.add("127.0.0.1/32".parse().unwrap());
+        assert!(ip_range.contains_network("0.0.0.0/0"));
     }
 }
