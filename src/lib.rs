@@ -432,7 +432,8 @@ where
             }
             root as *mut IpTrieNode
         } else {
-            self.root.insert(IpTrieNode::new()) as *mut IpTrieNode
+            self.root = Some(IpTrieNode::new());
+            self.root.as_mut().unwrap() as *mut IpTrieNode
         };
 
         unsafe {
