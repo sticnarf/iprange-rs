@@ -1,6 +1,6 @@
 [package]
 name = "iprange"
-version = "0.6.5"
+version = "0.6.6"
 authors = ["Yilin Chen <sticnarf@gmail.com>"]
 description = "A library to manage IP ranges"
 repository = "https://github.com/sticnarf/iprange-rs"
