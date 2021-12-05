@@ -38,7 +38,7 @@ fn read_lines_from_file(file_name: &str) -> Vec<String> {
     let path = PathBuf::from(file!());
     let f = File::open(path.with_file_name(file_name)).expect("Unable to open file");
     let reader = BufReader::new(f);
-    reader.lines().flat_map(|l| l).collect()
+    reader.lines().flatten().collect()
 }
 
 fn chnlists_v4() -> Vec<String> {
