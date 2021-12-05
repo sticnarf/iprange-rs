@@ -1755,7 +1755,7 @@ mod tests {
     fn remove_all() {
         let mut ip_range = IpRange::new();
         let network: Ipv4Net = "1.0.1.0/24".parse().unwrap();
-        ip_range.add(network.clone());
+        ip_range.add(network);
         ip_range.remove(network);
         assert!(ip_range.iter().next().is_none());
     }
