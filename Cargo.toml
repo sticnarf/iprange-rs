@@ -9,9 +9,6 @@ documentation = "https://docs.rs/iprange/"
 categories = ["network-programming"]
 license = "MIT"
 
-[badges]
-travis-ci = { repository = "sticnarf/iprange-rs" }
-
 [dependencies]
 ipnet = "2.0.0"
 serde = { version = "1", features = ["derive"], optional = true }
