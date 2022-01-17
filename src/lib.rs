@@ -41,7 +41,8 @@
 //! [`exclude`]: struct.IpRange.html#method.exclude
 
 extern crate ipnet;
-#[cfg(feature = "enable-serde")]
+#[cfg(feature = "serde")]
+#[macro_use]
 extern crate serde;
 
 use ipnet::{Ipv4Net, Ipv6Net};
@@ -50,8 +51,6 @@ use std::fmt;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::net::{Ipv4Addr, Ipv6Addr};
-#[cfg(feature = "enable-serde")]
-use serde::{Serialize, Deserialize};
 
 /// A set of networks that supports various operations:
 ///
@@ -91,7 +90,6 @@ use serde::{Serialize, Deserialize};
 /// [`intersect`]: struct.IpRange.html#method.intersect
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize), serde(transparent))]
 pub struct IpRange<N: IpNet> {
     // IpRange uses a radix trie to store networks
     trie: IpTrie<N>,
@@ -306,6 +304,32 @@ where
     }
 }
 
+#[cfg(feature = "serde")]
+impl<N: IpNet> serde::Serialize for IpRange<N> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(&self.trie.root, serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, N: IpNet> serde::Deserialize<'de> for IpRange<N> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(IpRange {
+            trie: IpTrie {
+                root: serde::Deserialize::deserialize(deserializer)?,
+                phantom_net: PhantomData,
+            },
+            phantom_net: PhantomData,
+        })
+    }
+}
+
 /// An abstraction for IP networks.
 pub trait IpNet: ToNetwork<Self> + fmt::Debug + Ord + Copy
 where
@@ -409,7 +433,6 @@ where
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize), serde(transparent))]
 struct IpTrie<N>
 where
     N: IpNet,
@@ -528,7 +551,7 @@ where
 
 /// Node of the inner radix trie.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize), serde(transparent))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(transparent))]
 pub struct IpTrieNode {
     children: [Option<Box<IpTrieNode>>; 2],
 }
@@ -1776,7 +1799,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "enable-serde")]
+    #[cfg(feature = "serde")]
     fn serialize_ipv4_as_binary() {
         let mut ip_range: IpRange<Ipv4Net> = IpRange::new();
         ip_range.add("0.0.0.0/0".parse().unwrap());
@@ -1788,7 +1811,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "enable-serde")]
+    #[cfg(feature = "serde")]
     fn serialize_ipv6_as_binary() {
         let mut ip_range: IpRange<Ipv6Net> = IpRange::new();
         ip_range.add("2001:4438::/32".parse().unwrap());

@@ -35,6 +35,15 @@ fn main() {
 }
 ```
 
+## Serde support
+
+Serde support is optional and disabled by default. To enable, use the feature `serde`.
+
+```toml
+[dependencies]
+iprange = { version = "0.6", features = ["serde"] }
+```
+
 ## Benchmark
 
 `iprange-rs` stores the IP networks in a radix trie.
