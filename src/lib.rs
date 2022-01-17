@@ -41,6 +41,8 @@
 //! [`exclude`]: struct.IpRange.html#method.exclude
 
 extern crate ipnet;
+#[cfg(feature = "enable-serde")]
+extern crate serde;
 
 use ipnet::{Ipv4Net, Ipv6Net};
 use std::collections::VecDeque;
@@ -48,6 +50,8 @@ use std::fmt;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::net::{Ipv4Addr, Ipv6Addr};
+#[cfg(feature = "enable-serde")]
+use serde::{Serialize, Deserialize};
 
 /// A set of networks that supports various operations:
 ///
@@ -87,6 +91,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// [`intersect`]: struct.IpRange.html#method.intersect
 /// [`exclude`]: struct.IpRange.html#method.exclude
 #[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize), serde(transparent))]
 pub struct IpRange<N: IpNet> {
     // IpRange uses a radix trie to store networks
     trie: IpTrie<N>,
@@ -404,6 +409,7 @@ where
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize), serde(transparent))]
 struct IpTrie<N>
 where
     N: IpNet,
@@ -522,6 +528,7 @@ where
 
 /// Node of the inner radix trie.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize), serde(transparent))]
 pub struct IpTrieNode {
     children: [Option<Box<IpTrieNode>>; 2],
 }
@@ -1766,5 +1773,29 @@ mod tests {
         ip_range.add("0.0.0.0/0".parse().unwrap());
         ip_range.add("127.0.0.1/32".parse().unwrap());
         assert!(ip_range.contains_network("0.0.0.0/0"));
+    }
+
+    #[test]
+    #[cfg(feature = "enable-serde")]
+    fn serialize_ipv4_as_binary() {
+        let mut ip_range: IpRange<Ipv4Net> = IpRange::new();
+        ip_range.add("0.0.0.0/0".parse().unwrap());
+        ip_range.add("127.0.0.1/32".parse().unwrap());
+        ip_range.add("254.254.254.254/32".parse().unwrap());
+        let encoded: Vec<u8> = bincode::serialize(&ip_range).unwrap();
+        let decoded_ip_range: IpRange<Ipv4Net> = bincode::deserialize(&encoded[..]).unwrap();
+        assert_eq!(ip_range, decoded_ip_range);
+    }
+
+    #[test]
+    #[cfg(feature = "enable-serde")]
+    fn serialize_ipv6_as_binary() {
+        let mut ip_range: IpRange<Ipv6Net> = IpRange::new();
+        ip_range.add("2001:4438::/32".parse().unwrap());
+        ip_range.add("2400:1040::/32".parse().unwrap());
+        ip_range.add("2400:1340::/32".parse().unwrap());
+        let encoded: Vec<u8> = bincode::serialize(&ip_range).unwrap();
+        let decoded_ip_range: IpRange<Ipv6Net> = bincode::deserialize(&encoded[..]).unwrap();
+        assert_eq!(ip_range, decoded_ip_range);
     }
 }
