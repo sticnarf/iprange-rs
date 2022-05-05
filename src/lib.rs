@@ -459,34 +459,32 @@ where
                 // Insert into all-zero network has no effect.
                 return;
             }
-            root as *mut IpTrieNode
+            root
         } else {
             self.root = Some(IpTrieNode::new());
-            self.root.as_mut().unwrap() as *mut IpTrieNode
+            self.root.as_mut().unwrap()
         };
 
-        unsafe {
-            let bits = network.prefix_bits();
-            for bit in bits {
-                let i = bit as usize;
-                let child = &mut (*node).children[i];
-                match child {
-                    Some(child) => {
-                        if child.is_leaf() {
-                            // This means the network to be inserted
-                            // is already in the trie.
-                            return;
-                        }
-                        node = &mut **child as *mut IpTrieNode;
+        let bits = network.prefix_bits();
+        for bit in bits {
+            let i = bit as usize;
+            let child = &mut node.children[i];
+            match child {
+                Some(child) => {
+                    if child.is_leaf() {
+                        // This means the network to be inserted
+                        // is already in the trie.
+                        return;
                     }
-                    None => {
-                        (*node).children[i] = Some(Box::new(IpTrieNode::new()));
-                        node = (*node).children[i].as_mut().unwrap().as_mut() as *mut IpTrieNode;
-                    }
+                    node = child;
+                }
+                None => {
+                    *child = Some(Box::new(IpTrieNode::new()));
+                    node = child.as_mut().unwrap();
                 }
             }
-            (*node).children = [None, None];
         }
+        node.children = [None, None];
     }
 
     fn search(&self, network: N) -> Option<N> {
