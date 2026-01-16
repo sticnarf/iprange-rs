@@ -10,8 +10,12 @@ categories = ["network-programming"]
 license = "MIT"
 
 [dependencies]
-ipnet = "2.0.0"
+ipnet = { version = "2", optional = true }
+ipnetwork = { version = "0.21", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+default = ["ipnet"]
 
 [dev-dependencies]
 rand = "0.3.17"
