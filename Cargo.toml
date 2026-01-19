@@ -8,6 +8,7 @@ readme = "README.md"
 documentation = "https://docs.rs/iprange/"
 categories = ["network-programming"]
 license = "MIT"
+edition = "2024"
 
 [dependencies]
 ipnet = { version = "2", optional = true }
