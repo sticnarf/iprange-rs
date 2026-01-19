@@ -15,7 +15,10 @@ ipnetwork = { version = "0.21", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [features]
-default = ["ipnet"]
+default = ["ipnet", "ipnetwork"]
+ipnet = ["dep:ipnet"]
+ipnetwork = ["dep:ipnetwork"]
+serde = ["dep:serde"]
 
 [dev-dependencies]
 rand = "0.3.17"
