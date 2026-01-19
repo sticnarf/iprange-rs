@@ -203,7 +203,7 @@ impl<N: IpNet> IpRange<N> {
     ///
     /// The returned `IpRange` is simplified.
     pub fn merge(&self, other: &IpRange<N>) -> Self {
-        self.into_iter().chain(other.into_iter()).collect()
+        self.into_iter().chain(other).collect()
     }
 
     /// Returns a new `IpRange` which contains all networks
@@ -244,7 +244,7 @@ impl<N: IpNet> IpRange<N> {
     }
 
     /// Returns the iterator to `&self`.
-    pub fn iter(&self) -> IpRangeIter<N> {
+    pub fn iter(&self) -> IpRangeIter<'_, N> {
         self.into_iter()
     }
 }

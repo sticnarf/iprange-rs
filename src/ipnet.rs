@@ -94,7 +94,7 @@ impl TraverseState for Ipv4TraverseState {
 
     #[inline]
     fn build(&self) -> Self::Net {
-        Ipv4Net::new(self.prefix.into(), self.prefix_len as u8).unwrap()
+        Ipv4Net::new(self.prefix.into(), self.prefix_len).unwrap()
     }
 }
 
@@ -218,7 +218,7 @@ impl TraverseState for Ipv6TraverseState {
 
     #[inline]
     fn build(&self) -> Self::Net {
-        Ipv6Net::new(self.prefix.into(), self.prefix_len as u8).unwrap()
+        Ipv6Net::new(self.prefix.into(), self.prefix_len).unwrap()
     }
 }
 
