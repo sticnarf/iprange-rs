@@ -36,13 +36,8 @@
 //! [`intersect`]: struct.IpRange.html#method.intersect
 //! [`exclude`]: struct.IpRange.html#method.exclude
 
-#[cfg(feature = "ipnet")]
-extern crate ipnet;
-#[cfg(feature = "ipnetwork")]
-extern crate ipnetwork;
 #[cfg(feature = "serde")]
-#[macro_use]
-extern crate serde;
+use serde::{Deserialize, Serialize};
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -492,11 +487,7 @@ where
             }
         }
 
-        if node.is_leaf() {
-            Some(network)
-        } else {
-            None
-        }
+        if node.is_leaf() { Some(network) } else { None }
 
         // The commented code below is more clear. However, this uses a
         // commented method `search` in IpTrieNode, and the performance

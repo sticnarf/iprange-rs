@@ -1,8 +1,5 @@
 #![feature(test)]
 
-extern crate ipnet;
-extern crate iprange;
-extern crate rand;
 extern crate test;
 
 use ipnet::{Ipv4Net, Ipv6Net};
