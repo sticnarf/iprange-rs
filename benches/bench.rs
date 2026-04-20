@@ -1,13 +1,10 @@
 #![feature(test)]
 
-extern crate ipnet;
-extern crate iprange;
-extern crate rand;
 extern crate test;
 
 use ipnet::{Ipv4Net, Ipv6Net};
 use iprange::*;
-use rand::{Rng, SeedableRng, StdRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -50,12 +47,18 @@ fn chnlists_v6() -> Vec<String> {
 }
 
 fn rand_ipv4_list(n: usize) -> Vec<Ipv4Addr> {
-    let mut rng = StdRng::from_seed(&[1926, 8, 17]);
+    let mut rng = StdRng::from_seed([
+        19, 26, 8, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0,
+    ]);
     (0..n).map(|_| rng.next_u32().into()).collect()
 }
 
 fn rand_ipv6_list(n: usize) -> Vec<Ipv6Addr> {
-    let mut rng = StdRng::from_seed(&[1926, 8, 17]);
+    let mut rng = StdRng::from_seed([
+        19, 26, 8, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0,
+    ]);
     (0..n)
         .map(|_| {
             let mut buf = [0u8; 16];

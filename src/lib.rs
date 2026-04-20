@@ -36,13 +36,8 @@
 //! [`intersect`]: struct.IpRange.html#method.intersect
 //! [`exclude`]: struct.IpRange.html#method.exclude
 
-#[cfg(feature = "ipnet")]
-extern crate ipnet;
-#[cfg(feature = "ipnetwork")]
-extern crate ipnetwork;
 #[cfg(feature = "serde")]
-#[macro_use]
-extern crate serde;
+use serde::{Deserialize, Serialize};
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -203,7 +198,7 @@ impl<N: IpNet> IpRange<N> {
     ///
     /// The returned `IpRange` is simplified.
     pub fn merge(&self, other: &IpRange<N>) -> Self {
-        self.into_iter().chain(other.into_iter()).collect()
+        self.into_iter().chain(other).collect()
     }
 
     /// Returns a new `IpRange` which contains all networks
@@ -244,7 +239,7 @@ impl<N: IpNet> IpRange<N> {
     }
 
     /// Returns the iterator to `&self`.
-    pub fn iter(&self) -> IpRangeIter<N> {
+    pub fn iter(&self) -> IpRangeIter<'_, N> {
         self.into_iter()
     }
 }
@@ -492,11 +487,7 @@ where
             }
         }
 
-        if node.is_leaf() {
-            Some(network)
-        } else {
-            None
-        }
+        if node.is_leaf() { Some(network) } else { None }
 
         // The commented code below is more clear. However, this uses a
         // commented method `search` in IpTrieNode, and the performance
